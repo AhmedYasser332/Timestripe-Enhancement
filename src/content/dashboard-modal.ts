@@ -250,9 +250,11 @@ function injectDashboardStyles(): void {
 
     .tse-dash-box {
       width: 680px;
-      max-width: calc(100vw - 32px);
+      min-width: 520px;
+      max-width: calc(100vw - 24px);
       height: 580px;
-      max-height: calc(100vh - 40px);
+      min-height: 420px;
+      max-height: calc(100vh - 24px);
       background: #1c1c1f;
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 12px;
@@ -261,7 +263,40 @@ function injectDashboardStyles(): void {
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
       animation: tseScaleIn 0.14s ease-out;
+    }
+
+    /* 8-direction interactive resize handles */
+    .tse-rh {
+      position: absolute;
+      z-index: 100;
+      user-select: none;
+    }
+    .tse-rh-n { top: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+    .tse-rh-s { bottom: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+    .tse-rh-w { left: 0; top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+    .tse-rh-e { right: 0; top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+    .tse-rh-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+    .tse-rh-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+    .tse-rh-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+    .tse-rh-se {
+      bottom: 0;
+      right: 0;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 3px;
+    }
+    .tse-rh-se::after {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid rgba(255, 255, 255, 0.35);
+      border-bottom: 1.5px solid rgba(255, 255, 255, 0.35);
     }
 
     @keyframes tseFadeIn {
@@ -489,20 +524,56 @@ function injectDashboardStyles(): void {
       border-color: rgba(255, 255, 255, 0.4);
     }
 
-    /* Project items in list */
+    /* Tree connector guides (elbow lines from parent to child) */
+    .tse-tree-guide {
+      position: absolute;
+      width: 0;
+      top: 0;
+      bottom: 0;
+      pointer-events: none;
+      border-inline-start: 1.5px solid rgba(255, 255, 255, 0.22);
+    }
+    .tse-tree-elbow {
+      position: absolute;
+      width: 12px;
+      top: 0;
+      height: 50%;
+      pointer-events: none;
+      border-inline-start: 1.5px solid rgba(255, 255, 255, 0.22);
+      border-bottom: 1.5px solid rgba(255, 255, 255, 0.22);
+      border-end-start-radius: 6px;
+    }
+    .tse-project-items-box {
+      background: #141416;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 9px;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .tse-project-items-box::-webkit-scrollbar {
+      width: 5px;
+    }
+    .tse-project-items-box::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 999px;
+    }
     .tse-project-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 8px 12px;
-      background: #1f1f22;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 8px;
-      transition: all 0.12s ease;
+      padding: 6px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      margin: 1px 0;
+      position: relative;
+      transition: background 0.12s ease;
     }
     .tse-project-row:hover {
-      background: #252528;
-      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
     }
 
     .tse-project-dot {
@@ -824,6 +895,67 @@ function injectDashboardStyles(): void {
   document.head.appendChild(style);
 }
 
+function initResizableBox(box: HTMLElement): void {
+  // 1. Restore saved dimensions if present
+  void chrome.storage.local.get("tse_dashboard_size").then((res) => {
+    const s = res?.tse_dashboard_size as { width?: number; height?: number } | undefined;
+    if (s?.width && s?.height) {
+      const maxW = window.innerWidth - 24;
+      const maxH = window.innerHeight - 24;
+      box.style.width = `${Math.min(maxW, Math.max(520, s.width))}px`;
+      box.style.height = `${Math.min(maxH, Math.max(420, s.height))}px`;
+    }
+  });
+
+  const handles = ["n", "s", "e", "w", "nw", "ne", "sw", "se"] as const;
+  for (const dir of handles) {
+    const h = document.createElement("div");
+    h.className = `tse-rh tse-rh-${dir}`;
+    h.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startW = box.offsetWidth;
+      const startH = box.offsetHeight;
+
+      const onPointerMove = (ev: PointerEvent) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        const maxW = window.innerWidth - 24;
+        const maxH = window.innerHeight - 24;
+
+        let newW = startW;
+        let newH = startH;
+
+        if (dir.includes("e")) newW = startW + dx;
+        if (dir.includes("w")) newW = startW - dx;
+        if (dir.includes("s")) newH = startH + dy;
+        if (dir.includes("n")) newH = startH - dy;
+
+        newW = Math.min(maxW, Math.max(520, newW));
+        newH = Math.min(maxH, Math.max(420, newH));
+
+        box.style.width = `${newW}px`;
+        box.style.height = `${newH}px`;
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        void chrome.storage.local.set({
+          tse_dashboard_size: { width: box.offsetWidth, height: box.offsetHeight },
+        });
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    });
+    box.appendChild(h);
+  }
+}
+
 export function closeDashboardModal(): void {
   if (activeModalEl) {
     activeModalEl.remove();
@@ -1002,6 +1134,9 @@ export async function openDashboardModal(): Promise<void> {
   box.addEventListener("mousedown", (e) => e.stopPropagation());
   box.addEventListener("mouseup", (e) => e.stopPropagation());
   box.addEventListener("click", (e) => e.stopPropagation());
+
+  // Attach 8-directional interactive resize handles (remembers preferred size)
+  initResizableBox(box);
 
   // Header
   const header = document.createElement("div");
@@ -1394,11 +1529,10 @@ function updateProjectsList(
   }
 
   const itemsContainer = document.createElement("div");
-  itemsContainer.style.display = "flex";
-  itemsContainer.style.flexDirection = "column";
-  itemsContainer.style.gap = "6px";
-  itemsContainer.style.maxHeight = "230px";
-  itemsContainer.style.overflowY = "auto";
+  itemsContainer.className = "tse-project-items-box";
+  itemsContainer.style.flex = "1";
+  itemsContainer.style.minHeight = "160px";
+  itemsContainer.style.maxHeight = "360px";
 
   const refresh = async (): Promise<void> => {
     const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
@@ -1408,42 +1542,63 @@ function updateProjectsList(
   };
 
   // Tree order (parents before children), honoring collapsed parents.
-  // Each entry carries ancestor-last flags for drawing the connector rails.
-  const visibleEntries: Array<{ node: ProjectTreeNode; ancestorLast: boolean[] }> = [];
-  const walk = (nodes: ProjectTreeNode[], ancestorLast: boolean[]): void => {
+  // Each entry carries continuingAncestors flags for drawing clean, non-crossing connector rails.
+  const visibleEntries: Array<{
+    node: ProjectTreeNode;
+    isLastSibling: boolean;
+    continuingAncestors: boolean[];
+  }> = [];
+
+  const walk = (nodes: ProjectTreeNode[], continuingAncestors: boolean[]): void => {
     nodes.forEach((n, idx) => {
-      const isLast = idx === nodes.length - 1;
-      visibleEntries.push({ node: n, ancestorLast });
+      const isLastSibling = idx === nodes.length - 1;
+      visibleEntries.push({
+        node: n,
+        isLastSibling,
+        continuingAncestors,
+      });
       if (n.children.length > 0 && !collapsedProjectIds.has(n.project.id)) {
-        walk(n.children, [...ancestorLast, isLast]);
+        const nextAncestors = n.depth === 0 ? [] : [...continuingAncestors, !isLastSibling];
+        walk(n.children, nextAncestors);
       }
     });
   };
   walk(buildProjectTree(projects), []);
 
-  for (const { node, ancestorLast } of visibleEntries) {
+  for (const { node, isLastSibling, continuingAncestors } of visibleEntries) {
     const p = node.project;
     const row = document.createElement("div");
     row.className = "tse-project-row";
     row.style.position = "relative";
-    row.style.paddingInlineStart = `${6 + node.depth * 20}px`;
+    row.style.paddingInlineStart = `${8 + node.depth * 20}px`;
 
-    // Connector rails: a pass-through line for every continuing ancestor and
-    // an elbow curving into this row from the immediate parent.
-    for (let a = 0; a < node.depth; a++) {
-      const isParentLevel = a === node.depth - 1;
-      if (!isParentLevel && ancestorLast[a]) continue;
-      const guide = document.createElement("span");
-      guide.className = "tse-tree-guide" + (isParentLevel ? " elbow" : "");
-      if (isParentLevel) {
-        guide.style.top = "-7px";
-        guide.style.height = "calc(50% + 7px)";
-      } else {
-        guide.style.top = "-7px";
-        guide.style.bottom = "-7px";
+    // Connector rails: only nodes at depth > 0 have rails connecting to parent
+    if (node.depth > 0) {
+      for (let a = 0; a < node.depth; a++) {
+        const isParentLevel = a === node.depth - 1;
+        const xPos = `${8 + a * 20 + 7}px`;
+        if (isParentLevel) {
+          // Elbow curving right into this child row
+          const elbow = document.createElement("span");
+          elbow.className = "tse-tree-elbow";
+          elbow.style.insetInlineStart = xPos;
+          row.appendChild(elbow);
+
+          // If this child has more siblings below it, continue the vertical line through the row
+          if (!isLastSibling) {
+            const vertical = document.createElement("span");
+            vertical.className = "tse-tree-guide";
+            vertical.style.insetInlineStart = xPos;
+            row.appendChild(vertical);
+          }
+        } else if (continuingAncestors[a]) {
+          // Higher ancestor has continuing siblings below — draw straight pass-through line
+          const vertical = document.createElement("span");
+          vertical.className = "tse-tree-guide";
+          vertical.style.insetInlineStart = xPos;
+          row.appendChild(vertical);
+        }
       }
-      guide.style.insetInlineStart = `${6 + a * 20 + 9}px`;
-      row.appendChild(guide);
     }
 
     // Expand/collapse toggle for parents (or a spacer to keep rows aligned)

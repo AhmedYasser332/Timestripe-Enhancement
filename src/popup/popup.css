@@ -310,25 +310,65 @@ input[type="password"]:focus {
 .project-items-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 250px;
+  gap: 1px;
+  max-height: 280px;
   overflow-y: auto;
+  background: #141416;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  padding: 4px;
 }
 
 .project-item-card {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  background: #202023;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  transition: all 0.12s ease;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  position: relative;
+  transition: background 0.12s ease;
+}
+.project-item-card:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
-.project-item-card:hover {
-  background: #242428;
-  border-color: rgba(255, 255, 255, 0.12);
+.popup-tree-guide {
+  position: absolute;
+  width: 0;
+  pointer-events: none;
+  border-inline-start: 1.5px solid rgba(255, 255, 255, 0.2);
+}
+.popup-tree-guide.elbow {
+  width: 12px;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-end-start-radius: 6px;
+}
+
+.popup-tree-expander {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #71717a;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  transition: all 0.1s ease;
+}
+.popup-tree-expander:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.popup-tree-spacer {
+  width: 16px;
+  flex-shrink: 0;
 }
 
 .project-jewel-dot {

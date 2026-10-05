@@ -276,6 +276,24 @@ await step("T7c delete dialog offers cascade vs promote; Cancel keeps everything
   assert((await page.locator(".tse-project-row", { hasText: "فقه" }).count()) === 1, "sub kept after cancel");
 });
 
+await step("T7d dashboard box is resizable from corner handle", async () => {
+  const box = page.locator(".tse-dash-box");
+  const initW = await box.evaluate((el) => el.offsetWidth);
+  const initH = await box.evaluate((el) => el.offsetHeight);
+  const seHandle = page.locator(".tse-rh-se");
+  const hb = await seHandle.boundingBox();
+  assert(hb, "SE resize handle should exist");
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + 120, hb.y + 80, { steps: 5 });
+  await page.mouse.up();
+  await sleep(200);
+  const newW = await box.evaluate((el) => el.offsetWidth);
+  const newH = await box.evaluate((el) => el.offsetHeight);
+  assert(newW > initW + 50, `modal width should expand from ${initW} to > ${initW + 50}, got ${newW}`);
+  assert(newH > initH + 40, `modal height should expand from ${initH} to > ${initH + 40}, got ${newH}`);
+});
+
 // ------------------------- Tabs / Settings -------------------------
 await step("T8 tab switch to Settings is instant (0ms display toggle)", async () => {
   await page.click(".tse-dash-tab:has-text('Settings & Appearance')");
@@ -342,14 +360,9 @@ await step("T13b flyout lists parents only; hovering the parent opens its childr
   await page.waitForSelector(".tse-tree-flyout", { timeout: 3000 });
   const childText = await page.locator(".tse-tree-flyout").innerText();
   assert(childText.includes("فقه"), `child flyout should show the sub, got: ${JSON.stringify(childText)}`);
-  // Move into the child flyout quickly (cancels the hover-close timer) and click
   const childRow = page.locator(".tse-tree-flyout .tse-menu-row:has-text('فقه')");
-  const crb = await childRow.boundingBox();
-  assert(crb, "child row should be visible");
-  await page.mouse.move(crb.x + crb.width / 2, crb.y + crb.height / 2);
-  await page.mouse.down();
-  await page.mouse.up();
-  await page.waitForSelector(".tse-toast:has-text('Assigned 2 tasks to فقه')", { timeout: 3000 }).catch(() => {});
+  await childRow.click();
+  await page.waitForSelector(".tse-toast", { timeout: 3000 }).catch(() => {});
   const toast = await page.locator(".tse-toast").last().textContent().catch(() => "");
   assert(toast && toast.includes("Assigned 2 tasks to فقه"), `toast should confirm nested assign, got "${toast}"`);
 });

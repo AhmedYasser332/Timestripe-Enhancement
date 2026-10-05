@@ -558,13 +558,31 @@ function openFlyout(goalId: string, anchorRow: HTMLElement, parentMenu: Element)
   flyout.style.top = `${Math.max(8, top)}px`;
 }
 
-/** Inject our section into a freshly opened native goal menu. */
-function maybeInject(menu: Element): void {
-  if (processedMenus.has(menu)) return;
+/** Inject our section into a freshly opened native goal menu. Returns true if injected. */
+function maybeInject(menu: Element): boolean {
+  // 1. Strict containment check: NEVER inject inside our own components!
+  if (
+    menu.closest(
+      "[id^='tse-'], [class*='tse-'], #tse-selection-bar, .tse-menu-section, .tse-bar-flyout, .tse-tree-flyout, .tse-flyout, .tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop",
+    )
+  ) {
+    return false;
+  }
+
+  // 2. Singleton check: Timestripe only has ONE native task menu open at a time.
+  // Never inject if this menu or anywhere in the document already has our section.
+  if (menu.querySelector(`.${SECTION_CLASS}`) || menu.closest(`.${SECTION_CLASS}`)) {
+    return false;
+  }
+  if (document.querySelector(`.${SECTION_CLASS}`)) {
+    return false;
+  }
+
+  if (processedMenus.has(menu)) return false;
   const text = menu.textContent ?? "";
-  if (!MENU_SIGNATURE.every((s) => text.includes(s))) return;
+  if (!MENU_SIGNATURE.every((s) => text.includes(s))) return false;
   const goalId = pendingGoalId;
-  if (!goalId) return; // not marked processed yet — retry on the next scan
+  if (!goalId) return false; // not marked processed yet — retry on the next scan
   processedMenus.add(menu);
 
   injectStylesOnce();
@@ -594,7 +612,7 @@ function maybeInject(menu: Element): void {
   });
   row.addEventListener("mouseleave", () => {
     row.classList.remove("tse-active");
-    scheduleCloseFlyout(180);
+    scheduleCloseFlyout(280);
   });
   row.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -639,7 +657,7 @@ function maybeInject(menu: Element): void {
   });
   colorRow.addEventListener("mouseleave", () => {
     colorRow.classList.remove("tse-active");
-    scheduleCloseFlyout(180);
+    scheduleCloseFlyout(280);
   });
   colorRow.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -700,7 +718,7 @@ function maybeInject(menu: Element): void {
   });
   dirRow.addEventListener("mouseleave", () => {
     dirRow.classList.remove("tse-active");
-    scheduleCloseFlyout(180);
+    scheduleCloseFlyout(280);
   });
   dirRow.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -709,16 +727,14 @@ function maybeInject(menu: Element): void {
   });
   section.appendChild(dirRow);
 
-  // Insert before the native "Delete" row when we can find it, otherwise append
-  const deleteEl = Array.from(menu.querySelectorAll<HTMLElement>("button, [role='menuitem']")).find(
-    (el) => (el.textContent ?? "").trim() === "Delete",
-  );
-  const deleteContainer = deleteEl ? deleteEl.closest("div") : null;
-  if (deleteContainer?.parentElement) {
-    deleteContainer.parentElement.insertBefore(section, deleteContainer);
+  // Insert cleanly at the top of the menu items (before the native color swatches / Assign)
+  const firstChild = menu.firstElementChild;
+  if (firstChild) {
+    menu.insertBefore(section, firstChild);
   } else {
     menu.appendChild(section);
   }
+  return true;
 }
 
 /** Called by the main observer loop on every DOM churn. */
@@ -727,29 +743,57 @@ export function scanForNativeMenus(): void {
   if (activeParentMenu && !document.contains(activeParentMenu)) {
     closeFlyouts();
   }
-  for (const menu of document.querySelectorAll("[role='menu']")) {
-    maybeInject(menu);
+
+  // If our section is ALREADY present and attached to the page, do not search or inject again!
+  const existingSection = document.querySelector(`.${SECTION_CLASS}`);
+  if (existingSection && document.contains(existingSection)) {
+    // Purge any accidental duplicates that might have leaked into the DOM
+    const allSections = document.querySelectorAll(`.${SECTION_CLASS}`);
+    if (allSections.length > 1) {
+      for (let i = 1; i < allSections.length; i++) allSections[i].remove();
+    }
+    return;
   }
-  // Fallback: newer Timestripe menus dropped [role='menu']. Find the innermost
+
+  // 1. First, check [role='menu'] (standard native menus)
+  for (const menu of document.querySelectorAll("[role='menu']")) {
+    if (
+      menu.closest(
+        "[id^='tse-'], [class*='tse-'], #tse-selection-bar, .tse-bar-flyout, .tse-tree-flyout, .tse-flyout",
+      )
+    ) {
+      continue;
+    }
+    if (maybeInject(menu)) return;
+  }
+
+  // 2. Fallback: newer Timestripe menus dropped [role='menu']. Find the innermost
   // container that still holds both signature buttons and treat it as the menu.
+  // STRICTLY exclude any TSE elements so we never match our own selection bar!
   const deleteBtn = Array.from(document.querySelectorAll<HTMLElement>("button, [role='menuitem']")).find(
     (el) =>
       (el.textContent ?? "").trim() === "Delete" &&
-      !el.closest(".tse-menu-section") &&
-      !el.closest(".tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop, .tse-bar-flyout, .tse-flyout"),
+      !el.closest(
+        "[id^='tse-'], [class*='tse-'], #tse-selection-bar, .tse-menu-section, .tse-bar-flyout, .tse-tree-flyout, .tse-flyout, .tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop",
+      ),
   );
   if (!deleteBtn) return;
   let container: HTMLElement | null = deleteBtn.parentElement;
   while (container && container !== document.body) {
-    if (container.closest(".tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop, .tse-bar-flyout, .tse-flyout")) return;
+    if (
+      container.closest(
+        "[id^='tse-'], [class*='tse-'], #tse-selection-bar, .tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop, .tse-bar-flyout, .tse-flyout",
+      )
+    ) {
+      return;
+    }
     const text = container.textContent ?? "";
     if (MENU_SIGNATURE.every((s) => text.includes(s))) {
       // Menu-like only — task-editor modals also contain Delete/Duplicate but
       // always carry form fields and many buttons.
       if (container.querySelector("input, textarea, [contenteditable='true']")) return;
       if (container.querySelectorAll("button, [role='menuitem']").length > 30) return;
-      maybeInject(container);
-      return;
+      if (maybeInject(container)) return;
     }
     container = container.parentElement;
   }

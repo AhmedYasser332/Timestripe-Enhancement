@@ -241,10 +241,13 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
         row.appendChild(arrow);
 
         row.addEventListener("mouseenter", () => {
+          for (let i = 0; i <= level; i++) cancelTimer(i);
           closeNestedFrom(level + 1);
           const childFly = document.createElement("div");
           childFly.className = "tse-flyout tse-tree-flyout";
-          childFly.addEventListener("mouseenter", () => cancelTimer(level));
+          childFly.addEventListener("mouseenter", () => {
+            for (let i = 0; i <= level; i++) cancelTimer(i);
+          });
           childFly.addEventListener("mouseleave", () => armClose(level));
           buildLevel(childFly, node.children, level + 1);
           document.body.appendChild(childFly);
@@ -253,8 +256,9 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
           const r = row.getBoundingClientRect();
           const fw = childFly.offsetWidth;
           const fh = childFly.offsetHeight;
-          let left = r.right + 4;
-          if (left + fw > window.innerWidth - 8) left = r.left - fw - 4;
+          // Position with a 2px overlap so the mouse never crosses a dead gap between flyouts
+          let left = r.right - 2;
+          if (left + fw > window.innerWidth - 8) left = r.left - fw + 2;
           let top = r.top - 4;
           if (top + fh > window.innerHeight - 8) top = window.innerHeight - fh - 8;
           childFly.style.left = `${Math.max(8, left)}px`;
@@ -281,7 +285,7 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
   };
   const armClose = (level: number): void => {
     cancelTimer(level);
-    timers[level] = setTimeout(() => closeNestedFrom(level + 1), 220);
+    timers[level] = setTimeout(() => closeNestedFrom(level + 1), 480);
   };
 
   buildLevel(root, buildProjectTree(ctx.projects), 0);
