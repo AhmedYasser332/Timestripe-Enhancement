@@ -563,9 +563,9 @@ function maybeInject(menu: Element): void {
   if (processedMenus.has(menu)) return;
   const text = menu.textContent ?? "";
   if (!MENU_SIGNATURE.every((s) => text.includes(s))) return;
-  processedMenus.add(menu);
   const goalId = pendingGoalId;
-  if (!goalId) return;
+  if (!goalId) return; // not marked processed yet — retry on the next scan
+  processedMenus.add(menu);
 
   injectStylesOnce();
   const section = document.createElement("div");
@@ -729,5 +729,28 @@ export function scanForNativeMenus(): void {
   }
   for (const menu of document.querySelectorAll("[role='menu']")) {
     maybeInject(menu);
+  }
+  // Fallback: newer Timestripe menus dropped [role='menu']. Find the innermost
+  // container that still holds both signature buttons and treat it as the menu.
+  const deleteBtn = Array.from(document.querySelectorAll<HTMLElement>("button, [role='menuitem']")).find(
+    (el) =>
+      (el.textContent ?? "").trim() === "Delete" &&
+      !el.closest(".tse-menu-section") &&
+      !el.closest(".tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop, .tse-bar-flyout, .tse-flyout"),
+  );
+  if (!deleteBtn) return;
+  let container: HTMLElement | null = deleteBtn.parentElement;
+  while (container && container !== document.body) {
+    if (container.closest(".tse-dash-overlay, .tse-modal-backdrop, .tse-tree-backdrop, .tse-bar-flyout, .tse-flyout")) return;
+    const text = container.textContent ?? "";
+    if (MENU_SIGNATURE.every((s) => text.includes(s))) {
+      // Menu-like only — task-editor modals also contain Delete/Duplicate but
+      // always carry form fields and many buttons.
+      if (container.querySelector("input, textarea, [contenteditable='true']")) return;
+      if (container.querySelectorAll("button, [role='menuitem']").length > 30) return;
+      maybeInject(container);
+      return;
+    }
+    container = container.parentElement;
   }
 }

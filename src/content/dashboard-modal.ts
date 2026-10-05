@@ -973,6 +973,7 @@ export function initDashboardShortcut(): void {
 /** Opens the native-styled full dashboard dialog inside the page */
 export async function openDashboardModal(): Promise<void> {
   injectDashboardStyles();
+  injectTreeStyles(); // tree rails + shared dialog styles (idempotent)
   closeDashboardModal();
 
   // Purge any stray full-screen backdrops left behind by a previous modal
@@ -1406,21 +1407,44 @@ function updateProjectsList(
     }
   };
 
-  // Tree order (parents before children), honoring collapsed parents
-  const visibleNodes: ProjectTreeNode[] = [];
-  const walk = (nodes: ProjectTreeNode[]): void => {
-    for (const n of nodes) {
-      visibleNodes.push(n);
-      if (n.children.length > 0 && !collapsedProjectIds.has(n.project.id)) walk(n.children);
-    }
+  // Tree order (parents before children), honoring collapsed parents.
+  // Each entry carries ancestor-last flags for drawing the connector rails.
+  const visibleEntries: Array<{ node: ProjectTreeNode; ancestorLast: boolean[] }> = [];
+  const walk = (nodes: ProjectTreeNode[], ancestorLast: boolean[]): void => {
+    nodes.forEach((n, idx) => {
+      const isLast = idx === nodes.length - 1;
+      visibleEntries.push({ node: n, ancestorLast });
+      if (n.children.length > 0 && !collapsedProjectIds.has(n.project.id)) {
+        walk(n.children, [...ancestorLast, isLast]);
+      }
+    });
   };
-  walk(buildProjectTree(projects));
+  walk(buildProjectTree(projects), []);
 
-  for (const node of visibleNodes) {
+  for (const { node, ancestorLast } of visibleEntries) {
     const p = node.project;
     const row = document.createElement("div");
     row.className = "tse-project-row";
+    row.style.position = "relative";
     row.style.paddingInlineStart = `${6 + node.depth * 20}px`;
+
+    // Connector rails: a pass-through line for every continuing ancestor and
+    // an elbow curving into this row from the immediate parent.
+    for (let a = 0; a < node.depth; a++) {
+      const isParentLevel = a === node.depth - 1;
+      if (!isParentLevel && ancestorLast[a]) continue;
+      const guide = document.createElement("span");
+      guide.className = "tse-tree-guide" + (isParentLevel ? " elbow" : "");
+      if (isParentLevel) {
+        guide.style.top = "-7px";
+        guide.style.height = "calc(50% + 7px)";
+      } else {
+        guide.style.top = "-7px";
+        guide.style.bottom = "-7px";
+      }
+      guide.style.insetInlineStart = `${6 + a * 20 + 9}px`;
+      row.appendChild(guide);
+    }
 
     // Expand/collapse toggle for parents (or a spacer to keep rows aligned)
     if (node.children.length > 0) {

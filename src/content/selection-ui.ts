@@ -85,7 +85,7 @@ document.addEventListener("pointerdown", (e) => {
   if (activePartialPopup && !target?.closest(`.${PARTIAL_POPUP_CLASS}`)) {
     closePartialPopup();
   }
-  if (activeBarFlyout && !target?.closest(".tse-bar-flyout") && !target?.closest(".tse-bar-btn")) {
+  if (activeBarFlyout && !target?.closest(".tse-bar-flyout, .tse-tree-flyout") && !target?.closest(".tse-bar-btn")) {
     closeBarFlyout();
   }
 }, true);

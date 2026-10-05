@@ -257,17 +257,23 @@ await step("T7b creates a sub-project that inherits scope (chips lock)", async (
   await page.selectOption("#tse-new-project-parent", "");
 });
 
-await step("T7c delete dialog offers promote/cascade and promote lifts the sub", async () => {
+await step("T7c delete dialog offers cascade vs promote; Cancel keeps everything", async () => {
   const parentRow = page.locator(".tse-project-row", { hasText: "Renamed Proj" });
   await parentRow.locator(".tse-btn-icon-del").click();
   await page.waitForSelector(".tse-tree-backdrop", { timeout: 3000 });
-  await page.click(".tse-tree-backdrop .tse-btn-secondary:has-text('Delete parent only')");
-  await sleep(500);
-  assert((await page.locator(".tse-project-row", { hasText: "Renamed Proj" }).count()) === 0, "parent should be deleted");
-  const subRow = page.locator(".tse-project-row", { hasText: "فقه" });
-  assert((await subRow.count()) === 1, "promoted sub should survive");
-  const indent = await subRow.evaluate((el) => Number.parseFloat(el.style.paddingInlineStart || "0"));
-  assert(indent <= 8, `promoted sub should sit at top level, indent=${indent}`);
+  assert(
+    (await page.locator(".tse-tree-backdrop .tse-btn-danger:has-text('Delete everything')").count()) === 1,
+    "cascade option should exist for a parent with subs",
+  );
+  assert(
+    (await page.locator(".tse-tree-backdrop .tse-btn-secondary:has-text('Delete parent only')").count()) === 1,
+    "promote option should exist for a parent with subs",
+  );
+  await page.click(".tse-tree-backdrop .tse-btn-secondary:has-text('Cancel')");
+  await sleep(200);
+  assert((await page.locator(".tse-tree-backdrop").count()) === 0, "dialog should close on cancel");
+  assert((await page.locator(".tse-project-row", { hasText: "Renamed Proj" }).count()) === 1, "parent kept after cancel");
+  assert((await page.locator(".tse-project-row", { hasText: "فقه" }).count()) === 1, "sub kept after cancel");
 });
 
 // ------------------------- Tabs / Settings -------------------------
@@ -326,28 +332,44 @@ await step("T13 row checkboxes open the Selection Manager bar", async () => {
   await page.waitForSelector("#tse-selection-bar", { timeout: 3000 });
 });
 
-await step("T13b bulk Project flyout → Browse all → tree modal assigns", async () => {
+await step("T13b flyout lists parents only; hovering the parent opens its children", async () => {
   await page.click("#tse-selection-bar .tse-bar-btn:has-text('Project')");
   await page.waitForSelector(".tse-bar-flyout", { timeout: 3000 });
-  const flyoutText = await page.locator(".tse-bar-flyout").innerText();
+  const rowsText = await page.locator(".tse-bar-flyout").innerText();
+  assert(rowsText.includes("Renamed Proj"), `parent should be listed, got: ${JSON.stringify(rowsText)}`);
+  assert(!rowsText.includes("فقه"), `sub must stay hidden at top level, got: ${JSON.stringify(rowsText)}`);
+  await page.hover(".tse-bar-flyout .tse-menu-row:has-text('Renamed Proj')");
+  await page.waitForSelector(".tse-tree-flyout", { timeout: 3000 });
+  const childText = await page.locator(".tse-tree-flyout").innerText();
+  assert(childText.includes("فقه"), `child flyout should show the sub, got: ${JSON.stringify(childText)}`);
+  // Move into the child flyout quickly (cancels the hover-close timer) and click
+  const childRow = page.locator(".tse-tree-flyout .tse-menu-row:has-text('فقه')");
+  const crb = await childRow.boundingBox();
+  assert(crb, "child row should be visible");
+  await page.mouse.move(crb.x + crb.width / 2, crb.y + crb.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForSelector(".tse-toast:has-text('Assigned 2 tasks to فقه')", { timeout: 3000 }).catch(() => {});
+  const toast = await page.locator(".tse-toast").last().textContent().catch(() => "");
+  assert(toast && toast.includes("Assigned 2 tasks to فقه"), `toast should confirm nested assign, got "${toast}"`);
+});
+
+await step("T13c Browse all opens the full tree modal with rails and assigns", async () => {
+  await page.click("#tse-selection-bar .tse-bar-btn:has-text('Project')");
+  await page.waitForSelector(".tse-bar-flyout", { timeout: 3000 });
   const browse = page.locator(".tse-bar-flyout .tse-menu-row:has-text('Browse all projects…')");
-  assert((await browse.count()) === 1, `flyout should offer Browse all projects, got rows: ${JSON.stringify(flyoutText)}`);
+  assert((await browse.count()) === 1, "flyout should offer Browse all projects");
   // The click handler tears the flyout down mid-click, which Playwright can
   // report as a failed click even though the action fired — tolerate that.
   await browse.click({ timeout: 3000 }).catch(() => {});
   await page.waitForSelector(".tse-tree-backdrop", { timeout: 5000 });
   const modalText = await page.locator(".tse-tree-backdrop").innerText();
   const rows = await page.locator(".tse-tree-backdrop .tse-tree-row").count();
-  if (rows < 3) {
-    const stored = await sw0.evaluate(() => chrome.storage.local.get(null));
-    const summary = Object.fromEntries(
-      Object.entries(stored).map(([k, v]) => [
-        k,
-        v && typeof v === "object" && Array.isArray(v.projects) ? v.projects.map((p) => `${p.name}${p.parentId ? "*" : ""}@${p.spaceId ?? "global"}`) : v,
-      ]),
-    );
-    assert(false, `tree modal should list the projects, got ${rows}: ${JSON.stringify(modalText)} | STORAGE=${JSON.stringify(summary)}`);
-  }
+  assert(rows >= 5, `tree modal should list all projects incl. subs, got ${rows}: ${JSON.stringify(modalText)}`);
+  assert(
+    (await page.locator(".tse-tree-backdrop .tse-tree-guide").count()) >= 1,
+    "connector rails should render for the sub",
+  );
   await page.click(".tse-tree-backdrop .tse-tree-row:has-text('Work')");
   await sleep(300);
   assert((await page.locator(".tse-tree-backdrop").count()) === 0, "tree modal should close after pick");
@@ -414,6 +436,24 @@ await step("T20 Ctrl+Z undoes the schedule", async () => {
   await sleep(800);
   const toast = await page.locator(".tse-toast").last().textContent().catch(() => "");
   assert(/undid/i.test(toast ?? ""), `toast should say "Undid…", got "${toast}"`);
+});
+
+await step("T20b delete dialog promote lifts فقه to top level", async () => {
+  await page.click("#tse-sidebar-trigger");
+  await page.waitForSelector(".tse-dash-overlay", { timeout: 3000 });
+  await page.click(".tse-dash-tab:has-text('Projects')");
+  const parentRow = page.locator(".tse-project-row", { hasText: "Renamed Proj" });
+  await parentRow.locator(".tse-btn-icon-del").click();
+  await page.waitForSelector(".tse-tree-backdrop", { timeout: 3000 });
+  await page.click(".tse-tree-backdrop .tse-btn-secondary:has-text('Delete parent only')");
+  await sleep(500);
+  assert((await page.locator(".tse-project-row", { hasText: "Renamed Proj" }).count()) === 0, "parent should be deleted");
+  const subRow = page.locator(".tse-project-row", { hasText: "فقه" });
+  assert((await subRow.count()) === 1, "promoted sub should survive");
+  const indent = await subRow.evaluate((el) => Number.parseFloat(el.style.paddingInlineStart || "0"));
+  assert(indent <= 8, `promoted sub should sit at top level, indent=${indent}`);
+  await page.click(".tse-dash-close-btn");
+  await sleep(200);
 });
 
 // ------------------------- Console errors -------------------------

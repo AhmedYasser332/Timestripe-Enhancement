@@ -13,16 +13,71 @@
  *    single click picks and closes — no chasing deep children through hovers.
  */
 
-import { buildProjectTree, effectiveColor, flattenTree, projectPath, type ProjectTreeNode } from "../shared/project-tree";
+import { buildProjectTree, effectiveColor, projectPath, type ProjectTreeNode } from "../shared/project-tree";
 import type { Project } from "../shared/types";
 
 const STYLE_ID = "tse-tree-ui-styles";
 
 /** Idempotent style injection — also used by the dashboard's delete dialog. */
 export function injectTreeStyles(): void {
-  if (document.getElementById(STYLE_ID)) return;  const style = document.createElement("style");
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
+    /* Self-contained fallbacks — the bar-flyout context may not have
+       menu-integration's stylesheet loaded (no native menu opened yet). */
+    .tse-menu-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 8px;
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-align: start;
+      cursor: pointer;
+      transition: background 0.12s ease;
+    }
+    .tse-menu-row:hover,
+    .tse-menu-row.tse-active {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .tse-flyout .tse-menu-row.tse-checked {
+      background: rgba(255, 255, 255, 0.08);
+      font-weight: 500;
+    }
+    .tse-flyout .tse-check {
+      margin-inline-start: auto;
+      opacity: 0.9;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .tse-current-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+    }
+    .tse-flyout-sep {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 5px 8px;
+    }
+    .tse-tree-flyout {
+      position: fixed;
+      min-width: 190px;
+      background: #1f1f21;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 6px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.3);
+      z-index: 2147483646;
+    }
+
     .tse-tree-arrow {
       margin-inline-start: auto;
       color: #71717a;
@@ -32,6 +87,19 @@ export function injectTreeStyles(): void {
     }
     .tse-menu-row:hover .tse-tree-arrow { color: #ffffff; }
     .tse-tree-chain { background: rgba(255, 255, 255, 0.06); }
+
+    /* Tree connector guides (elbow lines from parent to child) */
+    .tse-tree-guide {
+      position: absolute;
+      width: 0;
+      pointer-events: none;
+      border-inline-start: 1px solid rgba(255, 255, 255, 0.14);
+    }
+    .tse-tree-guide.elbow {
+      width: 13px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      border-end-start-radius: 8px;
+    }
 
     /* Full tree modal */
     .tse-tree-backdrop {
@@ -175,7 +243,7 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
         row.addEventListener("mouseenter", () => {
           closeNestedFrom(level + 1);
           const childFly = document.createElement("div");
-          childFly.className = "tse-flyout";
+          childFly.className = "tse-flyout tse-tree-flyout";
           childFly.addEventListener("mouseenter", () => cancelTimer(level));
           childFly.addEventListener("mouseleave", () => armClose(level));
           buildLevel(childFly, node.children, level + 1);
@@ -311,48 +379,73 @@ export function openProjectTreeModal(opts: TreeModalOptions): void {
     list.appendChild(topRow);
   }
 
-  const rows = flattenTree(buildProjectTree(pruned));
-  if (rows.length === 0 && !opts.allowTopLevel) {
-    const empty = document.createElement("div");
-    empty.className = "tse-tree-empty";
-    empty.textContent = "No projects yet.";
-    list.appendChild(empty);
-  }
-
   const currentChain = new Set(
     opts.currentParentId ? projectPath(pruned, opts.currentParentId).slice(0, -1).map((p) => p.id) : [],
   );
 
-  for (const node of rows) {
-    const p = node.project;
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className =
-      "tse-tree-row" +
-      (p.id === opts.currentParentId || currentChain.has(p.id) ? " current" : "");
-    row.style.paddingInlineStart = `${10 + node.depth * 18}px`;
-    if (node.depth > 0) row.title = projectPath(pruned, p.id).map((x) => x.name).join(" › ");
+  let renderedRows = 0;
+  const appendTreeRows = (nodes: ProjectTreeNode[], ancestorLast: boolean[]): void => {
+    nodes.forEach((node, idx) => {
+      renderedRows++;
+      const isLast = idx === nodes.length - 1;
+      const p = node.project;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.style.position = "relative";
+      row.className =
+        "tse-tree-row" +
+        (p.id === opts.currentParentId || currentChain.has(p.id) ? " current" : "");
+      row.style.paddingInlineStart = `${10 + node.depth * 18}px`;
+      if (node.depth > 0) row.title = projectPath(pruned, p.id).map((x) => x.name).join(" › ");
 
-    const dot = document.createElement("span");
-    dot.className = "tse-tree-dot" + (p.parentId && !p.color ? " inherited" : "");
-    dot.style.background = effectiveColor(pruned, p.id);
-    row.appendChild(dot);
+      // Connector guides: a pass-through line for every continuing ancestor,
+      // an elbow for the immediate parent (classic tree rails).
+      for (let a = 0; a < node.depth; a++) {
+        const isParentLevel = a === node.depth - 1;
+        if (!isParentLevel && ancestorLast[a]) continue;
+        const guide = document.createElement("span");
+        guide.className = "tse-tree-guide" + (isParentLevel ? " elbow" : "");
+        if (isParentLevel) {
+          guide.style.top = "0";
+          guide.style.height = "50%";
+        } else {
+          guide.style.top = "0";
+          guide.style.bottom = "0";
+        }
+        guide.style.insetInlineStart = `${10 + a * 18 + 9}px`;
+        row.appendChild(guide);
+      }
 
-    const label = document.createElement("span");
-    label.className = "tse-tree-label";
-    label.textContent = p.name;
-    label.dir = "auto";
-    row.appendChild(label);
+      const dot = document.createElement("span");
+      dot.className = "tse-tree-dot" + (p.parentId && !p.color ? " inherited" : "");
+      dot.style.background = effectiveColor(pruned, p.id);
+      row.appendChild(dot);
 
-    if (node.children.length > 0) {
-      const count = document.createElement("span");
-      count.className = "tse-tree-count";
-      count.textContent = `${node.children.length} sub`;
-      row.appendChild(count);
-    }
+      const label = document.createElement("span");
+      label.className = "tse-tree-label";
+      label.textContent = p.name;
+      label.dir = "auto";
+      row.appendChild(label);
 
-    row.addEventListener("click", () => pick(p));
-    list.appendChild(row);
+      if (node.children.length > 0) {
+        const count = document.createElement("span");
+        count.className = "tse-tree-count";
+        count.textContent = `${node.children.length} sub`;
+        row.appendChild(count);
+      }
+
+      row.addEventListener("click", () => pick(p));
+      list.appendChild(row);
+      appendTreeRows(node.children, [...ancestorLast, isLast]);
+    });
+  };
+  appendTreeRows(buildProjectTree(pruned), []);
+
+  if (renderedRows === 0 && !opts.allowTopLevel) {
+    const empty = document.createElement("div");
+    empty.className = "tse-tree-empty";
+    empty.textContent = "No projects yet.";
+    list.appendChild(empty);
   }
 
   if (opts.onRemove) {
