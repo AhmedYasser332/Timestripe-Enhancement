@@ -1117,15 +1117,20 @@ export async function openDashboardModal(): Promise<void> {
   overlay.className = "tse-dash-overlay";
   activeModalEl = overlay;
 
+  let overlayDownTarget: EventTarget | null = null;
   overlay.addEventListener("pointerdown", (e) => {
-    if (e.target === overlay) closeDashboardModal();
+    overlayDownTarget = e.target;
     e.stopPropagation();
   });
   overlay.addEventListener("mousedown", (e) => e.stopPropagation());
   overlay.addEventListener("mouseup", (e) => e.stopPropagation());
   overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeDashboardModal();
     e.stopPropagation();
+    // Only dismiss if both pointerdown and click occurred directly on the backdrop (not after a drag)
+    if (e.target === overlay && overlayDownTarget === overlay) {
+      closeDashboardModal();
+    }
+    overlayDownTarget = null;
   });
 
   const box = document.createElement("div");
@@ -1784,6 +1789,10 @@ function openProjectDeleteDialog(
   const box = document.createElement("div");
   box.className = "tse-tree-box";
   box.style.width = "460px";
+  box.addEventListener("pointerdown", (e) => e.stopPropagation());
+  box.addEventListener("mousedown", (e) => e.stopPropagation());
+  box.addEventListener("mouseup", (e) => e.stopPropagation());
+  box.addEventListener("click", (e) => e.stopPropagation());
 
   const head = document.createElement("div");
   head.className = "tse-tree-head";
@@ -1817,6 +1826,13 @@ function openProjectDeleteDialog(
   };
   document.addEventListener("keydown", onKey, true);
   backdrop.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    if (e.target === backdrop) close();
+  });
+  backdrop.addEventListener("mousedown", (e) => e.stopPropagation());
+  backdrop.addEventListener("mouseup", (e) => e.stopPropagation());
+  backdrop.addEventListener("click", (e) => {
+    e.stopPropagation();
     if (e.target === backdrop) close();
   });
 

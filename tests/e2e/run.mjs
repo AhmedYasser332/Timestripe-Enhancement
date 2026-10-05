@@ -469,6 +469,19 @@ await step("T20b delete dialog promote lifts فقه to top level", async () => {
   await sleep(200);
 });
 
+// ------------------------- Popup Parity -------------------------
+await step("T22 extension popup renders tree hierarchy with rails and parent select", async () => {
+  const extId = sw0.url().split("/")[2];
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/index.html`);
+  await popupPage.waitForSelector(".project-item-card", { timeout: 5000 });
+  const rowsCount = await popupPage.locator(".project-item-card").count();
+  assert(rowsCount >= 2, `popup should list the projects, got ${rowsCount}`);
+  const parentSelect = popupPage.locator(".add-project-card select");
+  assert((await parentSelect.count()) === 1, "parent select should exist in popup");
+  await popupPage.close();
+});
+
 // ------------------------- Console errors -------------------------
 await step("T21 no page JS errors during the whole run", async () => {
   const realErrors = pageErrors.filter((e) => !e.includes("ResizeObserver"));
