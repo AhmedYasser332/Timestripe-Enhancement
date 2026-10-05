@@ -70,6 +70,7 @@ function closePartialPopup(): void {
 }
 
 function closeBarFlyout(): void {
+  document.querySelectorAll(".tse-tree-flyout").forEach((el) => el.remove());
   if (activeBarFlyout) {
     const destroy = (activeBarFlyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy;
     destroy?.();

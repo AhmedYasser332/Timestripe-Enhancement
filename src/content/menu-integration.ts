@@ -53,6 +53,7 @@ function cancelCloseTimer(): void {
 
 export function closeFlyouts(): void {
   cancelCloseTimer();
+  document.querySelectorAll(".tse-tree-flyout").forEach((el) => el.remove());
   if (activeFlyout) {
     const destroy = (activeFlyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy;
     destroy?.();

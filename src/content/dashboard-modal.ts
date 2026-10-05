@@ -971,46 +971,65 @@ export function toggleDashboardModal(): void {
   }
 }
 
-/** Multi-strategy detector to find Timestripe's sidebar bottom section and insert our icon */
+/** Multi-strategy detector to find Timestripe's sidebar bottom section and insert our icon right above "+" */
 function findSidebarBottomTarget(): { container: HTMLElement; insertBeforeEl: HTMLElement | null } | null {
-  // Purge any trigger mistakenly placed near Templates in the middle of the screen
+  // Purge any trigger placed near Climbs, Colors, or outside the bottom 180px cluster
   const existing = document.getElementById("tse-sidebar-trigger");
   if (existing) {
     const r = existing.getBoundingClientRect();
-    if (r.top < window.innerHeight - 250) {
+    const isNearNavLinks = Boolean(
+      existing.closest("a, [href]") ||
+      existing.parentElement?.querySelector("a[href*='climbs'], a[href*='colors'], a[href*='horizons'], a[href*='boards']"),
+    );
+    if (r.top < window.innerHeight - 185 || isNearNavLinks) {
       existing.remove();
     } else {
-      return null; // Already correctly placed at the bottom!
+      return null; // Already correctly docked above the bottom "+"
     }
   }
 
-  // Strictly target elements docked on the left edge (x < 65px) in the bottom cluster (top > window.innerHeight - 250px)
-  const bottomItems = Array.from(
-    document.querySelectorAll<HTMLElement>("button, a, [role='button'], div"),
+  // 1. Strictly target buttons in the bottom-most 180px dock (x < 60px).
+  // Navigation links like Climbs (/climbs/), Colors, Boards are <a> tags and are strictly EXCLUDED.
+  const dockButtons = Array.from(
+    document.querySelectorAll<HTMLElement>("button, [role='button']"),
   ).filter((el) => {
+    if (el.closest("a, [href]")) return false; // never attach to navigation links
+    if (el.id === "tse-sidebar-trigger") return false;
     const r = el.getBoundingClientRect();
     return (
       r.left >= 0 &&
-      r.left < 65 &&
-      r.width >= 20 &&
+      r.left < 60 &&
+      r.width >= 16 &&
       r.width <= 50 &&
-      r.height >= 20 &&
+      r.height >= 16 &&
       r.height <= 50 &&
-      r.top > window.innerHeight - 250
+      r.top > window.innerHeight - 185
     );
   });
 
-  if (bottomItems.length === 0) return null;
+  if (dockButtons.length === 0) return null;
 
-  // Sort ascending by vertical position (top)
-  bottomItems.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  // Try to find the explicit "+" button first (by text content, SVG path, or aria/title)
+  const explicitPlus = dockButtons.find((el) => {
+    const txt = (el.textContent ?? "").trim();
+    if (txt === "+" || txt === "⊕") return true;
+    const label = ((el.getAttribute("aria-label") ?? "") + (el.getAttribute("title") ?? "")).toLowerCase();
+    if (label.includes("add") || label.includes("create") || label.includes("new")) return true;
+    return false;
+  });
 
-  // In Timestripe (Image 2 & 3), the bottom cluster is:
-  // [ ⊕ ]        <-- bottomItems[0] (topmost of bottom items)
-  // [ Search ]
-  // [ Settings ]
-  // [ Collapse ]
-  const plusBtn = bottomItems[0];
+  if (explicitPlus) {
+    return {
+      container: explicitPlus.parentElement ?? explicitPlus,
+      insertBeforeEl: explicitPlus,
+    };
+  }
+
+  // Fallback: in Timestripe's bottom dock, the items from bottom to top are:
+  // [Collapse ←] -> [Settings ⚙️] -> [Search 🔍] -> [Plus +]
+  // Sort ascending by vertical position (top): the topmost of this bottom cluster is the plus button!
+  dockButtons.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  const plusBtn = dockButtons[0];
   return {
     container: plusBtn.parentElement ?? plusBtn,
     insertBeforeEl: plusBtn,

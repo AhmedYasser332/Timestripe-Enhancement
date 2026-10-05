@@ -285,7 +285,8 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
   };
   const armClose = (level: number): void => {
     cancelTimer(level);
-    timers[level] = setTimeout(() => closeNestedFrom(level + 1), 480);
+    // Closing level L removes nested[L] and all its descendants
+    timers[level] = setTimeout(() => closeNestedFrom(level), 420);
   };
 
   buildLevel(root, buildProjectTree(ctx.projects), 0);
@@ -320,8 +321,19 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
 
   const destroy = (): void => {
     closeNestedFrom(0);
+    document.querySelectorAll(".tse-tree-flyout").forEach((el) => el.remove());
     for (let i = 0; i < timers.length; i++) cancelTimer(i);
+    document.removeEventListener("pointerdown", onGlobalPointerDown, true);
   };
+
+  const onGlobalPointerDown = (e: PointerEvent): void => {
+    const t = e.target as Element | null;
+    if (!t?.closest(".tse-tree-flyout, .tse-bar-flyout, .tse-flyout, .tse-menu-row")) {
+      destroy();
+    }
+  };
+  document.addEventListener("pointerdown", onGlobalPointerDown, true);
+
   return destroy;
 }
 
