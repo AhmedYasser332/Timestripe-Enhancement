@@ -226,13 +226,48 @@ await step("T6 project color dot opens palette and changes the color", async () 
 
 await step("T7 pencil renames a project inline", async () => {
   const row = page.locator(".tse-project-row", { hasText: "Playwright Project" });
-  await row.locator(".tse-icon-btn").click();
+  await row.locator(".tse-icon-btn").first().click();
   // the row's text is replaced by the input, so locate the input globally
   const input = page.locator(".tse-rename-input");
   await input.waitFor({ timeout: 3000 });
   await input.fill("Renamed Proj");
   await input.press("Enter");
   await page.waitForSelector(".tse-project-row:has-text('Renamed Proj')", { timeout: 5000 });
+});
+
+await step("T7b creates a sub-project that inherits scope (chips lock)", async () => {
+  const pid = await page.evaluate(() => {
+    const sel = document.querySelector("#tse-new-project-parent");
+    const opt = Array.from(sel.options).find((o) => o.textContent.includes("Renamed Proj"));
+    return opt?.value ?? null;
+  });
+  assert(pid, "parent option for Renamed Proj not found");
+  await page.selectOption("#tse-new-project-parent", pid);
+  const disabled = await page.getAttribute("#tse-new-project-scopes .tse-chip[data-scope='global']", "disabled");
+  assert(disabled !== null, "scope chips should be disabled while a parent is selected");
+  await page.fill("#tse-panel-projects input.tse-input", "فقه");
+  await page.click("#tse-panel-projects .tse-btn-primary");
+  const subRow = page.locator(".tse-project-row", { hasText: "فقه" });
+  await subRow.waitFor({ timeout: 5000 });
+  const indent = await subRow.evaluate((el) => Number.parseFloat(el.style.paddingInlineStart || "0"));
+  assert(indent > 0, `sub row should be indented, got ${indent}`);
+  const subScopeDisabled = await subRow.locator("select.tse-scope-select").getAttribute("disabled");
+  assert(subScopeDisabled !== null, "sub row scope select should be locked");
+  // reset the form parent for later tests
+  await page.selectOption("#tse-new-project-parent", "");
+});
+
+await step("T7c delete dialog offers promote/cascade and promote lifts the sub", async () => {
+  const parentRow = page.locator(".tse-project-row", { hasText: "Renamed Proj" });
+  await parentRow.locator(".tse-btn-icon-del").click();
+  await page.waitForSelector(".tse-tree-backdrop", { timeout: 3000 });
+  await page.click(".tse-tree-backdrop .tse-btn-secondary:has-text('Delete parent only')");
+  await sleep(500);
+  assert((await page.locator(".tse-project-row", { hasText: "Renamed Proj" }).count()) === 0, "parent should be deleted");
+  const subRow = page.locator(".tse-project-row", { hasText: "فقه" });
+  assert((await subRow.count()) === 1, "promoted sub should survive");
+  const indent = await subRow.evaluate((el) => Number.parseFloat(el.style.paddingInlineStart || "0"));
+  assert(indent <= 8, `promoted sub should sit at top level, indent=${indent}`);
 });
 
 // ------------------------- Tabs / Settings -------------------------
@@ -254,6 +289,12 @@ await step("T10 mode cards toggle (Strip Mode selected)", async () => {
   await page.click(".tse-mode-card:has-text('Strip Mode')");
   const cls = await page.getAttribute(".tse-mode-card:has-text('Strip Mode')", "class");
   assert(cls.includes("selected"), "Strip Mode card should be selected");
+});
+
+await step("T10b restores the active space to دنيا (sp2 is intentionally empty)", async () => {
+  await page.click("#tse-panel-settings .tse-chip[data-space='sp1']");
+  const cls = await page.getAttribute("#tse-panel-settings .tse-chip[data-space='sp1']", "class");
+  assert(cls.includes("active"), "دنيا chip should be active again");
 });
 
 await step("T11 Templates tab renders", async () => {
@@ -283,6 +324,35 @@ await step("T13 row checkboxes open the Selection Manager bar", async () => {
   await rowB.hover();
   await rowB.locator(".tse-select-btn").click();
   await page.waitForSelector("#tse-selection-bar", { timeout: 3000 });
+});
+
+await step("T13b bulk Project flyout → Browse all → tree modal assigns", async () => {
+  await page.click("#tse-selection-bar .tse-bar-btn:has-text('Project')");
+  await page.waitForSelector(".tse-bar-flyout", { timeout: 3000 });
+  const flyoutText = await page.locator(".tse-bar-flyout").innerText();
+  const browse = page.locator(".tse-bar-flyout .tse-menu-row:has-text('Browse all projects…')");
+  assert((await browse.count()) === 1, `flyout should offer Browse all projects, got rows: ${JSON.stringify(flyoutText)}`);
+  // The click handler tears the flyout down mid-click, which Playwright can
+  // report as a failed click even though the action fired — tolerate that.
+  await browse.click({ timeout: 3000 }).catch(() => {});
+  await page.waitForSelector(".tse-tree-backdrop", { timeout: 5000 });
+  const modalText = await page.locator(".tse-tree-backdrop").innerText();
+  const rows = await page.locator(".tse-tree-backdrop .tse-tree-row").count();
+  if (rows < 3) {
+    const stored = await sw0.evaluate(() => chrome.storage.local.get(null));
+    const summary = Object.fromEntries(
+      Object.entries(stored).map(([k, v]) => [
+        k,
+        v && typeof v === "object" && Array.isArray(v.projects) ? v.projects.map((p) => `${p.name}${p.parentId ? "*" : ""}@${p.spaceId ?? "global"}`) : v,
+      ]),
+    );
+    assert(false, `tree modal should list the projects, got ${rows}: ${JSON.stringify(modalText)} | STORAGE=${JSON.stringify(summary)}`);
+  }
+  await page.click(".tse-tree-backdrop .tse-tree-row:has-text('Work')");
+  await sleep(300);
+  assert((await page.locator(".tse-tree-backdrop").count()) === 0, "tree modal should close after pick");
+  const toast = await page.locator(".tse-toast").last().textContent().catch(() => "");
+  assert(toast && toast.includes("Assigned 2 tasks to Work"), `toast should confirm assignment, got "${toast}"`);
 });
 
 await step("T14 Schedule… opens the Fast Day Scheduler", async () => {

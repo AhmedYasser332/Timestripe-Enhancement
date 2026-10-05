@@ -40,3 +40,17 @@ export function readableTextColor(rgb: [number, number, number]): [number, numbe
 export function rgbTripleString(rgb: [number, number, number]): string {
   return `${rgb[0]}, ${rgb[1]}, ${rgb[2]}`;
 }
+
+/**
+ * Rich picker rows, modeled on Timestripe's own color picker
+ * (neutrals → vivid → pastels → deep → native). Shared by the popup and the
+ * in-page dashboard so both offer the exact same palette.
+ */
+export const PALETTE_ROWS: string[][] = [
+  ["#FFFFFF", "#EBEBEB", "#D6D6D6", "#BDBDBD", "#A3A3A3", "#8A8A8A", "#707070", "#575757", "#3D3D3D", "#262626"],
+  ["#F000F0", "#9013FE", "#2D2DE8", "#00A8FF", "#00E676", "#AEEA00", "#FFEA00", "#FF9100", "#FF3D00", "#C62828"],
+  ["#F8BBD0", "#F48FB1", "#EC9BB6", "#E1BEE7", "#CE93D8", "#B39DDB", "#9FA8DA", "#90CAF9", "#81D4FA", "#4FC3F7"],
+  ["#B2EBF2", "#80CBC4", "#A5D6A7", "#C5E1A5", "#E6EE9C", "#FFF59D", "#FFE082", "#FFCC80", "#FFAB91", "#FF8A65"],
+  ["#880E4F", "#4A148C", "#311B92", "#01579B", "#0277BD", "#00695C", "#1B5E20", "#827717", "#E65100", "#BF360C"],
+  ["#DF496D", "#955BE0", "#278DEA", "#23B5A8", "#92CE14", "#ECCE32", "#F2713A", "#FFFFFF", "#000000"],
+];

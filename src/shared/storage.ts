@@ -160,7 +160,7 @@ export async function removeProjectEverywhere(projectId: string): Promise<void> 
   }
 }
 
-export function newProject(name: string, color: string, spaceId?: string | null): Project {
+export function newProject(name: string, color: string, spaceId?: string | null, parentId?: string | null): Project {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
@@ -170,6 +170,7 @@ export function newProject(name: string, color: string, spaceId?: string | null)
     updatedAt: now,
     archived: false,
     spaceId: spaceId ?? null,
+    parentId: parentId ?? null,
   };
 }
 

@@ -22,6 +22,7 @@ import {
 } from "./state";
 import { openDuplicateModal } from "./duplicate-modal";
 import { openTemplatesModal } from "./templates-modal";
+import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import { pushAction } from "./history";
 import type { TaskTextConfig } from "../shared/types";
 
@@ -53,6 +54,8 @@ function cancelCloseTimer(): void {
 export function closeFlyouts(): void {
   cancelCloseTimer();
   if (activeFlyout) {
+    const destroy = (activeFlyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy;
+    destroy?.();
     activeFlyout.remove();
     activeFlyout = null;
   }
@@ -517,45 +520,28 @@ function openFlyout(goalId: string, anchorRow: HTMLElement, parentMenu: Element)
     scheduleCloseFlyout(180);
   });
 
-  for (const project of projects) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = project.id === current ? "tse-menu-row tse-checked" : "tse-menu-row";
-    const dot = document.createElement("span");
-    dot.className = "tse-current-dot";
-    dot.style.background = project.color;
-    row.appendChild(dot);
-    const label = document.createElement("span");
-    label.textContent = project.name;
-    label.dir = "auto";
-    row.appendChild(label);
-    if (project.id === current) {
-      const check = document.createElement("span");
-      check.className = "tse-check";
-      check.textContent = "✓";
-      row.appendChild(check);
-    }
-    row.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void assign(goalId, project.id, project.name);
-    });
-    flyout.appendChild(row);
-  }
+  const assignTo = (project: { id: string; name: string } | null): void => {
+    if (project) void assign(goalId, project.id, project.name);
+    else void assign(goalId, null, undefined);
+  };
 
-  if (current) {
-    const sep = document.createElement("div");
-    sep.className = "tse-flyout-sep";
-    flyout.appendChild(sep);
-    const removeRow = document.createElement("button");
-    removeRow.type = "button";
-    removeRow.className = "tse-menu-row";
-    removeRow.textContent = "Remove project";
-    removeRow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void assign(goalId, null, undefined);
-    });
-    flyout.appendChild(removeRow);
-  }
+  const destroy = fillProjectFlyout(flyout, {
+    projects,
+    currentProjectId: current,
+    onPick: assignTo,
+    onRemove: current ? () => assignTo(null) : undefined,
+    onBrowseAll: () => {
+      closeFlyouts();
+      openProjectTreeModal({
+        projects,
+        title: "Assign to project",
+        subtitle: "Click any project to assign it to this task.",
+        onPick: assignTo,
+        onRemove: current ? () => assignTo(null) : undefined,
+      });
+    },
+  });
+  (flyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy = destroy;
 
   document.body.appendChild(flyout);
 

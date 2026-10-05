@@ -35,6 +35,8 @@ export interface Project {
   archived: boolean;
   /** Space id this project is scoped to; null or undefined = Global (available across all spaces). */
   spaceId?: string | null;
+  /** Parent project id for sub-projects; null/undefined = top level. A sub always shares its parent's scope and inherits its color when color is empty. */
+  parentId?: string | null;
 }
 
 /** PRD §40 — only explicit links are stored; inherited ones are computed (PRD §7.4). */
@@ -88,11 +90,13 @@ export type AssignmentSource = "explicit" | "inherited";
 export interface AssignmentInfo {
   projectId: string;
   name: string;
-  /** Effective hex color (override if set, else project color) */
+  /** Effective hex color (override if set, else project/ancestor color) */
   color: string;
   source: AssignmentSource;
   colorSource: "project" | "override";
   overrideColor?: string;
+  /** Full sub-project chain "root › … › leaf" for tooltips. */
+  path?: string;
 }
 
 export interface ViewState {

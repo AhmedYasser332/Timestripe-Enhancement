@@ -11,6 +11,17 @@ import { sendToBg } from "./messaging";
 import { getProjects, getSettings, getViewState } from "./state";
 import { showToast } from "./toast";
 import { bindActivate } from "./activate";
+import { openProjectTreeModal, injectTreeStyles } from "./project-tree-ui";
+import { PALETTE_ROWS } from "../shared/colors";
+import {
+  buildProjectTree,
+  descendantsOf,
+  effectiveColor,
+  flattenTree,
+  projectPath,
+  subtreeTaskCount,
+  type ProjectTreeNode,
+} from "../shared/project-tree";
 import type {
   GoalTemplate,
   Project,
@@ -32,6 +43,11 @@ let cachedTemplates: GoalTemplate[] = [];
 // Persistent New Project Form state so background sync never resets user input
 let newProjectScope = "global";
 let newProjectColor = "#00A8FF";
+let newProjectColorTouched = false;
+let newProjectParentId: string | null = null;
+
+// Collapsed parents in the dashboard projects tree
+const collapsedProjectIds = new Set<string>();
 
 // Pre-fetch spaces and templates on script load so cachedSpaces is ready immediately
 void sendToBg<TSSpace[]>({ type: "LIST_SPACES" }).then((res) => {
@@ -46,9 +62,8 @@ const QUICK_COLORS = [
   "#FF9100", "#FF3D00", "#F48FB1", "#7C5CFF",
 ];
 
-/**
- * Shared color-picker popover (used by project rows and the New Project card).
- */
+/** Shared rich color-picker popover — same palette as the popup (PALETTE_ROWS),
+ *  plus Custom and EyeDropper. Used by project rows and the New Project card. */
 function openColorPopover(
   anchor: HTMLElement,
   currentColor: string,
@@ -61,18 +76,20 @@ function openColorPopover(
 
   const grid = document.createElement("div");
   grid.className = "tse-color-pop-grid";
-  for (const c of QUICK_COLORS) {
-    const sw = document.createElement("button");
-    sw.type = "button";
-    sw.className = "tse-color-pop-swatch";
-    sw.style.background = c;
-    if (c.toUpperCase() === currentColor.toUpperCase()) sw.classList.add("selected");
-    sw.title = c;
-    bindActivate(sw, () => {
-      onPick(c);
-      pop.remove();
-    });
-    grid.appendChild(sw);
+  for (const row of PALETTE_ROWS) {
+    for (const c of row) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "tse-color-pop-swatch";
+      sw.style.background = c;
+      if (c.toUpperCase() === currentColor.toUpperCase()) sw.classList.add("selected");
+      sw.title = c;
+      bindActivate(sw, () => {
+        onPick(c);
+        pop.remove();
+      });
+      grid.appendChild(sw);
+    }
   }
   pop.appendChild(grid);
 
@@ -83,16 +100,20 @@ function openColorPopover(
   colorInput.type = "color";
   colorInput.value = /^#[0-9a-f]{6}$/i.test(currentColor) ? currentColor : "#00A8FF";
 
+  const customLabel = document.createElement("span");
+  customLabel.className = "tse-color-custom-label";
+  customLabel.append(colorInput, document.createTextNode("Custom"));
+
   const hexInput = document.createElement("input");
   hexInput.type = "text";
   hexInput.className = "tse-input tse-color-hex";
   hexInput.placeholder = "#RRGGBB";
   hexInput.value = colorInput.value;
+  hexInput.oninput = () => {
+    if (/^#[0-9a-f]{6}$/i.test(hexInput.value.trim())) colorInput.value = hexInput.value.trim();
+  };
   colorInput.oninput = () => {
     hexInput.value = colorInput.value;
-  };
-  hexInput.onchange = () => {
-    if (/^#[0-9a-f]{6}$/i.test(hexInput.value.trim())) colorInput.value = hexInput.value.trim();
   };
 
   const applyBtn = document.createElement("button");
@@ -105,8 +126,45 @@ function openColorPopover(
     pop.remove();
   });
 
-  customRow.append(colorInput, hexInput, applyBtn);
+  customRow.append(customLabel, hexInput, applyBtn);
   pop.appendChild(customRow);
+
+  const pickerRow = document.createElement("div");
+  pickerRow.className = "tse-color-picker-row";
+
+  // Reset to inherited color (sub-projects may follow their parent)
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "tse-btn-secondary tse-color-reset";
+  resetBtn.textContent = "↺ Inherit";
+  resetBtn.title = "Remove this color and inherit the parent project's";
+  bindActivate(resetBtn, () => {
+    onPick("");
+    pop.remove();
+  });
+  pickerRow.appendChild(resetBtn);
+
+  const eyeCtor = (window as unknown as { EyeDropper?: new () => { open(): Promise<{ sRGBHex: string }> } }).EyeDropper;
+  if (eyeCtor) {
+    const eyeBtn = document.createElement("button");
+    eyeBtn.type = "button";
+    eyeBtn.className = "tse-btn-secondary tse-color-eye";
+    eyeBtn.innerHTML = `💧 <span>EyeDropper</span>`;
+    eyeBtn.title = "Sample color from screen";
+    bindActivate(eyeBtn, () => {
+      void new eyeCtor()
+        .open()
+        .then((res) => {
+          onPick(res.sRGBHex);
+          pop.remove();
+        })
+        .catch(() => {
+          /* user cancelled */
+        });
+    });
+    pickerRow.appendChild(eyeBtn);
+  }
+  pop.appendChild(pickerRow);
 
   document.body.appendChild(pop);
 
@@ -117,7 +175,7 @@ function openColorPopover(
   let x = r.left;
   let y = r.bottom + 6;
   if (x + pw > window.innerWidth - 8) x = window.innerWidth - pw - 8;
-  if (y + ph > window.innerHeight - 8) y = r.top - ph - 6;
+  if (y + ph > window.innerHeight - 8) y = Math.max(8, r.top - ph - 6);
   pop.style.left = `${Math.max(8, x)}px`;
   pop.style.top = `${Math.max(8, y)}px`;
 
@@ -614,10 +672,11 @@ function injectDashboardStyles(): void {
       font-size: 13px !important;
     }
 
-    /* Color picker popover */
+    /* Color picker popover (same palette as the popup) */
     .tse-color-pop {
       position: fixed;
       z-index: 2147483647;
+      width: 252px;
       background: #1f1f22;
       border: 1px solid rgba(255, 255, 255, 0.16);
       border-radius: 10px;
@@ -625,38 +684,47 @@ function injectDashboardStyles(): void {
       box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 9px;
       animation: tseFadeIn 0.1s ease-out;
     }
     .tse-color-pop-grid {
       display: grid;
-      grid-template-columns: repeat(4, 26px);
-      gap: 7px;
+      grid-template-columns: repeat(10, 20px);
+      gap: 3px;
+      justify-content: center;
     }
     .tse-color-pop-swatch {
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.2);
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
       cursor: pointer;
       transition: transform 0.1s ease;
       padding: 0;
     }
     .tse-color-pop-swatch:hover {
-      transform: scale(1.15);
+      transform: scale(1.18);
     }
     .tse-color-pop-swatch.selected {
-      border-color: #ffffff;
-      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+      outline: 2px solid #ffffff;
+      outline-offset: 1px;
     }
     .tse-color-pop-custom {
       display: flex;
       align-items: center;
       gap: 7px;
     }
+    .tse-color-custom-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #d4d4d8;
+      cursor: pointer;
+    }
     .tse-color-pop-custom input[type="color"] {
-      width: 30px;
-      height: 30px;
+      width: 24px;
+      height: 24px;
       padding: 0;
       border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 6px;
@@ -664,7 +732,7 @@ function injectDashboardStyles(): void {
       cursor: pointer;
     }
     .tse-color-hex {
-      width: 92px;
+      width: 84px;
       padding: 5px 8px !important;
       font-size: 12px !important;
       font-family: monospace;
@@ -672,6 +740,85 @@ function injectDashboardStyles(): void {
     .tse-color-apply {
       padding: 6px 12px !important;
       font-size: 12px !important;
+      margin-inline-start: auto;
+    }
+    .tse-color-picker-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-top: 9px;
+    }
+    .tse-color-reset, .tse-color-eye {
+      font-size: 11.5px;
+      padding: 5px 10px;
+    }
+
+    /* Project tree rows */
+    .tse-tree-expander {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: #71717a;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 0;
+      transition: all 0.1s ease;
+    }
+    .tse-tree-expander:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .tse-tree-expander-spacer {
+      width: 18px;
+      flex-shrink: 0;
+      display: inline-block;
+    }
+    .tse-project-dot.inherited {
+      box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.35);
+    }
+    .tse-project-dot-btn .tse-project-dot.inherited {
+      opacity: 0.85;
+    }
+    .tse-chip:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .tse-chip:disabled:hover {
+      color: #a1a1aa;
+      border-color: rgba(255, 255, 255, 0.12);
+      background: #202024;
+    }
+    .tse-btn-danger {
+      background: #ef4444;
+      color: #ffffff;
+      border: none;
+      border-radius: 7px;
+      padding: 8px 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s ease;
+    }
+    .tse-btn-danger:hover {
+      background: #dc2626;
+    }
+    .tse-version-pill {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: #a1a1aa;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-inline-start: 6px;
     }
   `;
   document.head.appendChild(style);
@@ -868,6 +1015,7 @@ export async function openDashboardModal(): Promise<void> {
     <span style="display:inline-flex;width:8px;height:8px;border-radius:50%;background:#ffffff;"></span>
     <span>Timestripe Enhancement</span>
     <span style="font-size:11px;color:#8e8e93;font-weight:400;margin-inline-start:4px;">(KK)</span>
+    <span class="tse-version-pill">v${chrome.runtime.getManifest().version}</span>
   `;
 
   const closeBtn = document.createElement("button");
@@ -1023,6 +1171,47 @@ function renderProjectsPanel(
   input.className = "tse-input";
   input.placeholder = "Project name (e.g. Work, Study, Health)";
 
+  // Parent selector (sub-projects) — subs inherit scope + optionally color
+  const parentRow = document.createElement("div");
+  parentRow.style.cssText = "display:flex;align-items:center;gap:8px;";
+  const parentLabel = document.createElement("span");
+  parentLabel.style.cssText = "font-size:12px;color:#8e8e93;flex-shrink:0;";
+  parentLabel.textContent = "Parent:";
+  const parentSelect = document.createElement("select");
+  parentSelect.id = "tse-new-project-parent";
+  parentSelect.className = "tse-scope-select";
+  parentSelect.style.flex = "1";
+  const syncParentOptions = (): void => syncNewProjectParentSelect(projects);
+  syncParentOptions();
+  parentSelect.onchange = () => {
+    newProjectParentId = parentSelect.value || null;
+    // Read the LIVE project list (state cache) — the render-time snapshot goes stale
+    const parent = getProjects().find((x) => x.id === newProjectParentId);
+    // A sub inherits the parent's scope — lock the scope chips
+    const chips = scopeRow.querySelectorAll<HTMLButtonElement>(".tse-chip[data-scope]");
+    if (parent) {
+      newProjectScope = (projectPath(getProjects(), parent.id)[0]?.spaceId ?? "global") || "global";
+      setScopeSelection(scopeRow, newProjectScope);
+      chips.forEach((c) => {
+        c.disabled = true;
+        c.title = "Sub-projects inherit the parent project's scope";
+      });
+      // Default to the parent's effective color until the user picks one
+      if (!newProjectColorTouched) {
+        newProjectColor = effectiveColor(getProjects(), parent.id);
+        swatchRow
+          .querySelectorAll(".tse-swatch")
+          .forEach((el, i) => el.classList.toggle("selected", QUICK_COLORS[i] === newProjectColor));
+      }
+    } else {
+      chips.forEach((c) => {
+        c.disabled = false;
+        c.title = "";
+      });
+    }
+  };
+  parentRow.append(parentLabel, parentSelect);
+
   // Scope selection chips (High-Contrast, Instant Visual Feedback)
   const scopeRow = document.createElement("div");
   scopeRow.id = "tse-new-project-scopes";
@@ -1055,6 +1244,7 @@ function renderProjectsPanel(
     s.style.background = c;
     bindActivate(s, () => {
       newProjectColor = c;
+      newProjectColorTouched = true;
       swatchRow.querySelectorAll(".tse-swatch").forEach((el) => el.classList.remove("selected"));
       s.classList.add("selected");
     });
@@ -1075,17 +1265,28 @@ function renderProjectsPanel(
     void (async () => {
       const val = input.value.trim();
       if (!val) return;
-      await sendToBg({
+      const created = await sendToBg<Project>({
         type: "CREATE_PROJECT",
         name: val,
         color: newProjectColor,
-        spaceId: newProjectScope === "global" ? null : newProjectScope,
+        spaceId: newProjectParentId ? undefined : (newProjectScope === "global" ? null : newProjectScope),
+        parentId: newProjectParentId,
       });
+      if (created && !created.ok) {
+        showToast(`Create failed: ${created.error ?? "unknown error"}`);
+        return;
+      }
       input.value = "";
-      showToast(`Created project "${val}"`);
+      showToast(
+        newProjectParentId
+          ? `Created sub-project "${val}"`
+          : `Created project "${val}"`,
+      );
+      newProjectColorTouched = false;
       const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
       if (updated?.ok && updated.data) {
         updateProjectsList(listCard, updated.data, spaces, viewState);
+        syncParentOptions();
       }
     })();
   });
@@ -1095,7 +1296,7 @@ function renderProjectsPanel(
   };
 
   btnRow.appendChild(createBtn);
-  newCard.append(input, scopeRow, swatchRow, btnRow);
+  newCard.append(input, parentRow, scopeRow, swatchRow, btnRow);
   panel.appendChild(newCard);
 }
 
@@ -1140,6 +1341,26 @@ function setScopeSelection(scopeRow: HTMLElement, targetScope: string): void {
   });
 }
 
+/** Keep the New-Project parent select in sync with the current project list. */
+function syncNewProjectParentSelect(projects: Project[]): void {
+  const sel = document.getElementById("tse-new-project-parent") as HTMLSelectElement | null;
+  if (!sel) return;
+  const prev = newProjectParentId;
+  sel.innerHTML =
+    `<option value="">No parent (top level)</option>` +
+    flattenTree(buildProjectTree(projects))
+      .map(
+        (n) =>
+          `<option value="${n.project.id}" ${n.project.id === prev ? "selected" : ""}>${" ".repeat(n.depth * 2)}${
+            n.depth > 0 ? "↳ " : ""
+          }${n.project.name}</option>`,
+      )
+      .join("");
+  if (prev && !Array.from(sel.options).some((o) => o.value === prev)) {
+    newProjectParentId = null; // parent vanished (deleted) — reset the form
+  }
+}
+
 function updateProjectsList(
   listCard: HTMLElement,
   projects: Project[],
@@ -1147,6 +1368,7 @@ function updateProjectsList(
   viewState: ViewState,
 ): void {
   listCard.innerHTML = "";
+  syncNewProjectParentSelect(projects);
 
   const taskCounts = new Map<string, number>();
   for (const a of Object.values(viewState.assignments)) {
@@ -1177,25 +1399,64 @@ function updateProjectsList(
   itemsContainer.style.maxHeight = "230px";
   itemsContainer.style.overflowY = "auto";
 
-  for (const p of projects) {
+  const refresh = async (): Promise<void> => {
+    const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
+    if (updated?.ok && updated.data) {
+      updateProjectsList(listCard, updated.data, spaces, viewState);
+    }
+  };
+
+  // Tree order (parents before children), honoring collapsed parents
+  const visibleNodes: ProjectTreeNode[] = [];
+  const walk = (nodes: ProjectTreeNode[]): void => {
+    for (const n of nodes) {
+      visibleNodes.push(n);
+      if (n.children.length > 0 && !collapsedProjectIds.has(n.project.id)) walk(n.children);
+    }
+  };
+  walk(buildProjectTree(projects));
+
+  for (const node of visibleNodes) {
+    const p = node.project;
     const row = document.createElement("div");
     row.className = "tse-project-row";
+    row.style.paddingInlineStart = `${6 + node.depth * 20}px`;
 
-    // Color dot = edit-color button (opens palette popover)
+    // Expand/collapse toggle for parents (or a spacer to keep rows aligned)
+    if (node.children.length > 0) {
+      const expander = document.createElement("button");
+      expander.type = "button";
+      expander.className = "tse-tree-expander";
+      expander.textContent = collapsedProjectIds.has(p.id) ? "▸" : "▾";
+      expander.title = collapsedProjectIds.has(p.id) ? "Expand sub-projects" : "Collapse sub-projects";
+      bindActivate(expander, () => {
+        if (collapsedProjectIds.has(p.id)) collapsedProjectIds.delete(p.id);
+        else collapsedProjectIds.add(p.id);
+        void updateProjectsList(listCard, projects, spaces, viewState);
+      });
+      row.appendChild(expander);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "tse-tree-expander-spacer";
+      row.appendChild(spacer);
+    }
+
+    // Color dot = edit-color button (opens rich palette)
     const dotBtn = document.createElement("button");
     dotBtn.type = "button";
     dotBtn.className = "tse-project-dot-btn";
-    dotBtn.title = "Change project color";
+    const inherited = Boolean(p.parentId) && !p.color;
+    dotBtn.title = inherited ? `Inherits color from parent — click to set its own` : "Change project color";
     const dot = document.createElement("span");
-    dot.className = "tse-project-dot";
-    dot.style.background = p.color;
+    dot.className = "tse-project-dot" + (inherited ? " inherited" : "");
+    dot.style.background = effectiveColor(projects, p.id);
     dotBtn.appendChild(dot);
     bindActivate(dotBtn, () => {
-      openColorPopover(dotBtn, p.color, (color) => {
+      openColorPopover(dotBtn, p.color || effectiveColor(projects, p.id), (color) => {
         void (async () => {
           await sendToBg({ type: "UPDATE_PROJECT", project: { ...p, color } });
-          dot.style.background = color;
-          showToast(`Color updated for "${p.name}"`);
+          showToast(color ? `Color updated for "${p.name}"` : `"${p.name}" now inherits its parent's color`);
+          await refresh();
         })();
       });
     });
@@ -1203,7 +1464,7 @@ function updateProjectsList(
     const name = document.createElement("span");
     name.className = "tse-project-name";
     name.textContent = p.name;
-    name.title = p.name;
+    name.title = projectPath(projects, p.id).map((x) => x.name).join(" › ");
     name.setAttribute("dir", "auto");
 
     // Pencil = inline rename
@@ -1231,11 +1492,13 @@ function updateProjectsList(
             await sendToBg({ type: "UPDATE_PROJECT", project: { ...p, name: next } });
             p.name = next;
             showToast(`Renamed to "${next}"`);
+            await refresh();
           })();
+        } else {
+          name.textContent = next || p.name;
+          name.title = next || p.name;
+          input.replaceWith(name);
         }
-        name.textContent = next || p.name;
-        name.title = next || p.name;
-        input.replaceWith(name);
       };
       input.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") {
@@ -1250,25 +1513,60 @@ function updateProjectsList(
       input.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     });
 
-    // Scope select
+    // Move = re-parent via the full tree picker
+    const moveBtn = document.createElement("button");
+    moveBtn.type = "button";
+    moveBtn.className = "tse-icon-btn";
+    moveBtn.title = "Move under another project";
+    moveBtn.textContent = "⤷";
+    bindActivate(moveBtn, () => {
+      openProjectTreeModal({
+        projects,
+        title: `Move "${p.name}"`,
+        subtitle: "Pick the new parent — a single click moves it.",
+        allowTopLevel: true,
+        currentParentId: p.parentId ?? null,
+        excludeIds: [p.id, ...descendantsOf(projects, p.id).map((d) => d.id)],
+        onPick: (target) => {
+          void (async () => {
+            await sendToBg({
+              type: "UPDATE_PROJECT",
+              project: { ...p, parentId: target ? target.id : null },
+            });
+            showToast(target ? `Moved under "${target.name}"` : "Moved to top level");
+            await refresh();
+          })();
+        },
+      });
+    });
+
+    // Scope select — sub-projects inherit the parent's scope (locked)
+    const effScope = projectPath(projects, p.id)[0]?.spaceId ?? null;
     const select = document.createElement("select");
     select.className = "tse-scope-select";
     select.innerHTML = `
-      <option value="global" ${!p.spaceId || p.spaceId === "global" ? "selected" : ""}>🌐 Global</option>
-      ${spaces.map((s) => `<option value="${s.id}" ${p.spaceId === s.id ? "selected" : ""}>${s.name}</option>`).join("")}
+      <option value="global" ${!effScope || effScope === "global" ? "selected" : ""}>🌐 Global</option>
+      ${spaces.map((s) => `<option value="${s.id}" ${effScope === s.id ? "selected" : ""}>${s.name}</option>`).join("")}
     `;
-    select.onchange = async () => {
-      const nextScope = select.value === "global" ? null : select.value;
-      await sendToBg({ type: "UPDATE_PROJECT", project: { ...p, spaceId: nextScope } });
-      const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
-      if (updated?.ok && updated.data) {
-        updateProjectsList(listCard, updated.data, spaces, viewState);
-      }
-    };
+    if (p.parentId) {
+      select.disabled = true;
+      select.title = "Sub-projects inherit the parent project's scope";
+    } else {
+      select.onchange = async () => {
+        const nextScope = select.value === "global" ? null : select.value;
+        await sendToBg({ type: "UPDATE_PROJECT", project: { ...p, spaceId: nextScope } });
+        await refresh();
+      };
+    }
 
+    // Total task count across the whole subtree
+    const totalTasks = subtreeTaskCount(projects, p.id, taskCounts);
     const countPill = document.createElement("span");
     countPill.className = "tse-project-pill";
-    countPill.textContent = `${taskCounts.get(p.id) ?? 0} tasks`;
+    countPill.textContent = `${totalTasks} tasks`;
+    if (node.children.length > 0) {
+      countPill.title = `Includes sub-projects (${taskCounts.get(p.id) ?? 0} direct)`;
+    }
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
@@ -1276,20 +1574,120 @@ function updateProjectsList(
     deleteBtn.textContent = "✕";
     deleteBtn.title = "Delete Project";
     deleteBtn.onclick = async () => {
-      if (confirm(`Delete project "${p.name}"?`)) {
-        await sendToBg({ type: "DELETE_PROJECT", projectId: p.id });
-        const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
-        if (updated?.ok && updated.data) {
-          updateProjectsList(listCard, updated.data, spaces, viewState);
-        }
-      }
+      openProjectDeleteDialog(p, projects, taskCounts.get(p.id) ?? 0, () => void refresh());
     };
 
-    row.append(dotBtn, name, renameBtn, select, countPill, deleteBtn);
+    row.append(dotBtn, name, renameBtn, moveBtn, select, countPill, deleteBtn);
     itemsContainer.appendChild(row);
   }
 
   listCard.appendChild(itemsContainer);
+}
+
+/**
+ * Native-styled delete confirmation. When the project has sub-projects the
+ * user chooses: delete the whole subtree, or delete the parent only and
+ * promote its children one level up (user decision 2026-10-05).
+ */
+function openProjectDeleteDialog(
+  project: Project,
+  projects: Project[],
+  directTaskCount: number,
+  onDone: () => void,
+): void {
+  injectTreeStyles(); // the dialog reuses .tse-tree-backdrop/.tse-tree-box styles
+  document.querySelectorAll(".tse-tree-backdrop").forEach((el) => el.remove());
+
+  const descendants = descendantsOf(projects, project.id);
+  const backdrop = document.createElement("div");
+  backdrop.className = "tse-tree-backdrop";
+
+  const box = document.createElement("div");
+  box.className = "tse-tree-box";
+  box.style.width = "460px";
+
+  const head = document.createElement("div");
+  head.className = "tse-tree-head";
+  const title = document.createElement("div");
+  title.className = "tse-tree-title";
+  title.textContent = `Delete "${project.name}"?`;
+  head.appendChild(title);
+
+  const desc = document.createElement("div");
+  desc.className = "tse-tree-sub";
+  desc.textContent =
+    `${directTaskCount} linked task${directTaskCount === 1 ? "" : "s"} will lose their project assignment.` +
+    (descendants.length > 0
+      ? ` This project also has ${descendants.length} sub-project${descendants.length === 1 ? "" : "s"} in its tree.`
+      : "");
+  head.appendChild(desc);
+  box.appendChild(head);
+
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;padding:14px 16px;flex-wrap:wrap;";
+
+  const close = (): void => {
+    document.removeEventListener("keydown", onKey, true);
+    backdrop.remove();
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    }
+  };
+  document.addEventListener("keydown", onKey, true);
+  backdrop.addEventListener("pointerdown", (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  const runDelete = (mode: "cascade" | "promote"): void => {
+    void (async () => {
+      await sendToBg({ type: "DELETE_PROJECT", projectId: project.id, mode });
+      showToast(
+        mode === "promote"
+          ? `Deleted "${project.name}" — ${descendants.length} sub-project(s) promoted`
+          : `Deleted "${project.name}"${descendants.length > 0 ? ` and ${descendants.length} sub-project(s)` : ""}`,
+      );
+      close();
+      onDone();
+    })();
+  };
+
+  if (descendants.length > 0) {
+    const cascadeBtn = document.createElement("button");
+    cascadeBtn.type = "button";
+    cascadeBtn.className = "tse-btn-danger";
+    cascadeBtn.textContent = `Delete everything (${descendants.length + 1} projects)`;
+    bindActivate(cascadeBtn, () => runDelete("cascade"));
+
+    const promoteBtn = document.createElement("button");
+    promoteBtn.type = "button";
+    promoteBtn.className = "tse-btn-secondary";
+    promoteBtn.textContent = `Delete parent only — promote ${descendants.length} sub`;
+    promoteBtn.title = "Children move up into this project's place";
+    bindActivate(promoteBtn, () => runDelete("promote"));
+
+    actions.append(promoteBtn, cascadeBtn);
+  } else {
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "tse-btn-danger";
+    delBtn.textContent = "Delete project";
+    bindActivate(delBtn, () => runDelete("cascade"));
+    actions.appendChild(delBtn);
+  }
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "tse-btn-secondary";
+  cancelBtn.textContent = "Cancel";
+  bindActivate(cancelBtn, close);
+  actions.appendChild(cancelBtn);
+
+  box.appendChild(actions);
+  backdrop.appendChild(box);
+  document.body.appendChild(backdrop);
 }
 
 function renderSettingsPanel(
@@ -1365,6 +1763,73 @@ function renderSettingsPanel(
 
   spaceCard.appendChild(chipsRow);
   panel.appendChild(spaceCard);
+
+  // 1.5 API Key Connection card (popup parity — manage the key without opening the popup)
+  const apiCard = document.createElement("div");
+  apiCard.className = "tse-card";
+  apiCard.innerHTML = `
+    <span class="tse-card-title">API Key Connection</span>
+    <p class="tse-card-desc">Your personal Timestripe API key. It is stored locally and never displayed again.</p>
+  `;
+
+  const apiRow = document.createElement("div");
+  apiRow.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+  const keyInput = document.createElement("input");
+  keyInput.type = "password";
+  keyInput.className = "tse-input";
+  keyInput.style.flex = "1";
+  keyInput.style.minWidth = "160px";
+  keyInput.placeholder = "Personal API Key";
+  keyInput.autocomplete = "off";
+
+  const saveKeyBtn = document.createElement("button");
+  saveKeyBtn.type = "button";
+  saveKeyBtn.className = "tse-btn-secondary";
+  saveKeyBtn.textContent = "Save Key";
+  const testKeyBtn = document.createElement("button");
+  testKeyBtn.type = "button";
+  testKeyBtn.className = "tse-btn-secondary";
+  testKeyBtn.textContent = "Test Connection";
+
+  const apiStatus = document.createElement("span");
+  apiStatus.style.cssText = "font-size:12px;color:#8e8e93;min-height:16px;";
+
+  bindActivate(saveKeyBtn, () => {
+    void (async () => {
+      const key = keyInput.value.trim();
+      if (!key) {
+        apiStatus.textContent = "Enter a key first.";
+        apiStatus.style.color = "#f87171";
+        return;
+      }
+      await sendToBg({ type: "SAVE_API_KEY", apiKey: key });
+      keyInput.value = "";
+      apiStatus.textContent = "✓ API Key saved successfully.";
+      apiStatus.style.color = "#34d399";
+      showToast("API Key saved");
+    })();
+  });
+  bindActivate(testKeyBtn, () => {
+    void (async () => {
+      testKeyBtn.textContent = "Testing…";
+      const res = await sendToBg<{ status: number; body: string }>({ type: "TEST_API" });
+      testKeyBtn.textContent = "Test Connection";
+      if (res?.ok && res.data.status === 200) {
+        apiStatus.textContent = `✓ Connected: ${res.data.body}`;
+        apiStatus.style.color = "#34d399";
+      } else {
+        apiStatus.textContent = `✗ ${res?.ok ? res.data.body : (res?.error ?? "No API key saved")}`;
+        apiStatus.style.color = "#f87171";
+      }
+    })();
+  });
+  keyInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void saveKeyBtn.click();
+  });
+
+  apiRow.append(keyInput, saveKeyBtn, testKeyBtn);
+  apiCard.append(apiRow, apiStatus);
+  panel.appendChild(apiCard);
 
   // 2. Appearance & Indicators Card
   const appCard = document.createElement("div");

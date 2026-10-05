@@ -75,9 +75,16 @@ export type ImportBackupMessage = {
 export type ListSpacesMessage = { type: "LIST_SPACES" };
 export type SetActiveSpaceMessage = { type: "SET_ACTIVE_SPACE"; spaceId: string };
 export type GetProjectsMessage = { type: "GET_PROJECTS" };
-export type CreateProjectMessage = { type: "CREATE_PROJECT"; name: string; color: string; spaceId?: string | null };
+export type CreateProjectMessage = {
+  type: "CREATE_PROJECT";
+  name: string;
+  color: string;
+  spaceId?: string | null;
+  parentId?: string | null;
+};
 export type UpdateProjectMessage = { type: "UPDATE_PROJECT"; project: Project };
-export type DeleteProjectMessage = { type: "DELETE_PROJECT"; projectId: string };
+/** mode: "cascade" removes the project AND every descendant; "promote" removes only the project and lifts its children one level up. */
+export type DeleteProjectMessage = { type: "DELETE_PROJECT"; projectId: string; mode?: "cascade" | "promote" };
 export type GetSettingsMessage = { type: "GET_SETTINGS" };
 export type SetSettingsMessage = { type: "SET_SETTINGS"; patch: Partial<Settings> };
 export type SaveApiKeyMessage = { type: "SAVE_API_KEY"; apiKey: string };

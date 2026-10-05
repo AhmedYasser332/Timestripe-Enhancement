@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AssignmentInfo, Project, TSSpace, ViewState } from "../shared/types";
 import { ColorPicker } from "./ColorPicker";
+import { descendantsOf } from "../shared/project-tree";
 
 async function callBg<T>(message: unknown): Promise<T | null> {
   const res = (await chrome.runtime.sendMessage(message)) as { ok: true; data: T } | { ok: false; error: string };
@@ -26,7 +27,7 @@ export function ProjectsTab(): React.JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [search, setSearch] = useState("");
-  const [deletingProject, setDeletingProject] = useState<{ id: string; name: string; taskCount: number } | null>(null);
+  const [deletingProject, setDeletingProject] = useState<{ id: string; name: string; taskCount: number; subCount: number } | null>(null);
 
   const load = useCallback(async () => {
     const [data, view, spList] = await Promise.all([
@@ -177,8 +178,13 @@ export function ProjectsTab(): React.JSX.Element {
                     <select
                       className={p.spaceId ? "project-scope-select scope-specific" : "project-scope-select"}
                       value={p.spaceId ?? "global"}
+                      disabled={Boolean(p.parentId)}
                       onChange={(e) => void updateScope(p.id, e.target.value === "global" ? null : e.target.value)}
-                      title={`Scope: ${!p.spaceId || p.spaceId === "global" ? "Global (All Spaces)" : (spaces.find((s) => s.id === p.spaceId)?.name ?? p.spaceId)}`}
+                      title={
+                        p.parentId
+                          ? "Sub-projects inherit the parent project's scope"
+                          : `Scope: ${!p.spaceId || p.spaceId === "global" ? "Global (All Spaces)" : (spaces.find((s) => s.id === p.spaceId)?.name ?? p.spaceId)}`
+                      }
                     >
                       <option value="global">🌐 Global</option>
                       {spaces.map((s) => (
@@ -208,7 +214,12 @@ export function ProjectsTab(): React.JSX.Element {
                         className="btn-icon"
                         title="Delete"
                         onClick={() =>
-                          setDeletingProject({ id: p.id, name: p.name, taskCount: counts.get(p.id) ?? 0 })
+                          setDeletingProject({
+                            id: p.id,
+                            name: p.name,
+                            taskCount: counts.get(p.id) ?? 0,
+                            subCount: descendantsOf(projects, p.id).length,
+                          })
                         }
                       >
                         ✕
@@ -299,6 +310,15 @@ export function ProjectsTab(): React.JSX.Element {
                   <br />
                   <span style={{ color: "#fbbf24" }}>
                     {deletingProject.taskCount} linked tasks will lose their project assignment.
+                  </span>
+                </>
+              )}
+              {deletingProject.subCount > 0 && (
+                <>
+                  <br />
+                  <span style={{ color: "#fbbf24" }}>
+                    Its {deletingProject.subCount} sub-project{deletingProject.subCount === 1 ? "" : "s"} will be
+                    deleted too.
                   </span>
                 </>
               )}

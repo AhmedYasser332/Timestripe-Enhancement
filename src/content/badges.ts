@@ -190,7 +190,9 @@ export function applyBadge(
     if (content) {
       const chip = document.createElement("span");
       chip.className = CHIP_CLASS;
-      chip.title = `${info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
+      // For sub-projects the badge shows the sub's own name; the full
+      // "root › … › leaf" path lives in the tooltip (user decision 2026-10-05).
+      chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
       const dot = document.createElement("span");
       dot.className = "tse-chip-dot";
       const label = document.createElement("span");

@@ -35,6 +35,7 @@ import {
 } from "./state";
 import { pushAction } from "./history";
 import { showToast } from "./toast";
+import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import type { BulkDeleteResult } from "../shared/messages";
 import type { TaskTextConfig } from "../shared/types";
 
@@ -70,6 +71,8 @@ function closePartialPopup(): void {
 
 function closeBarFlyout(): void {
   if (activeBarFlyout) {
+    const destroy = (activeBarFlyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy;
+    destroy?.();
     activeBarFlyout.remove();
     activeBarFlyout = null;
   }
@@ -690,59 +693,23 @@ function openBulkProjectFlyout(anchorBtn: HTMLElement): void {
     prevProjects[id] = assignments[id]?.source === "explicit" ? assignments[id].projectId : null;
   }
 
-  for (const project of projects) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "tse-menu-row";
-    const dot = document.createElement("span");
-    dot.className = "tse-current-dot";
-    dot.style.background = project.color;
-    const label = document.createElement("span");
-    label.textContent = project.name;
-    label.dir = "auto";
-    row.append(dot, label);
-    row.onclick = async () => {
-      closeBarFlyout();
-      for (const id of selectedGoalIds) optimisticAssign(id, project.id);
-      showToast(`Assigned ${selectedGoalIds.length} tasks to ${project.name}`, project.color);
-
-      pushAction({
-        id: crypto.randomUUID(),
-        description: `Assign ${selectedGoalIds.length} tasks to ${project.name}`,
-        undo: async () => {
-          for (const [id, prevPId] of Object.entries(prevProjects)) {
-            optimisticAssign(id, prevPId);
-            await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: [id], projectId: prevPId });
-          }
-        },
-        redo: async () => {
-          for (const id of selectedGoalIds) optimisticAssign(id, project.id);
-          await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId: project.id });
-        },
-      });
-
-      const res = await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId: project.id });
-      if (res && !res.ok) showToast(`Assignment failed: ${res.error}`);
-    };
-    flyout.appendChild(row);
-  }
-
-  const sep = document.createElement("div");
-  sep.className = "tse-flyout-sep";
-  flyout.appendChild(sep);
-
-  const removeRow = document.createElement("button");
-  removeRow.type = "button";
-  removeRow.className = "tse-menu-row";
-  removeRow.textContent = "Remove project";
-  removeRow.onclick = async () => {
+  const assignBulk = async (project: { id: string; name: string } | null): Promise<void> => {
     closeBarFlyout();
-    for (const id of selectedGoalIds) optimisticAssign(id, null);
-    showToast(`Removed project from ${selectedGoalIds.length} tasks`);
+    for (const id of selectedGoalIds) optimisticAssign(id, project ? project.id : null);
+    showToast(
+      project
+        ? `Assigned ${selectedGoalIds.length} tasks to ${project.name}`
+        : `Removed project from ${selectedGoalIds.length} tasks`,
+    );
+
+    const projectId = project ? project.id : null;
+    const description = project
+      ? `Assign ${selectedGoalIds.length} tasks to ${project.name}`
+      : `Remove project from ${selectedGoalIds.length} tasks`;
 
     pushAction({
       id: crypto.randomUUID(),
-      description: `Remove project from ${selectedGoalIds.length} tasks`,
+      description,
       undo: async () => {
         for (const [id, prevPId] of Object.entries(prevProjects)) {
           optimisticAssign(id, prevPId);
@@ -750,20 +717,35 @@ function openBulkProjectFlyout(anchorBtn: HTMLElement): void {
         }
       },
       redo: async () => {
-        for (const id of selectedGoalIds) optimisticAssign(id, null);
-        await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId: null });
+        for (const id of selectedGoalIds) optimisticAssign(id, projectId);
+        await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId });
       },
     });
 
-    const res = await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId: null });
+    const res = await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: selectedGoalIds, projectId });
     if (res && !res.ok) showToast(`Failed: ${res.error}`);
   };
-  flyout.appendChild(removeRow);
+
+  const destroy = fillProjectFlyout(flyout, {
+    projects,
+    onPick: assignBulk,
+    onBrowseAll: () => {
+      closeBarFlyout();
+      openProjectTreeModal({
+        projects,
+        title: "Assign to project",
+        subtitle: `Click any project to assign ${selectedGoalIds.length} selected tasks.`,
+        onPick: assignBulk,
+        onRemove: () => assignBulk(null),
+      });
+    },
+  });
+  (flyout as HTMLElement & { __tseTreeDestroy?: () => void }).__tseTreeDestroy = destroy;
 
   document.body.appendChild(flyout);
   const rect = anchorBtn.getBoundingClientRect();
   flyout.style.left = `${rect.left}px`;
-  flyout.style.top = `${rect.top - flyout.offsetHeight - 6}px`;
+  flyout.style.top = `${Math.max(8, rect.top - flyout.offsetHeight - 6)}px`;
 }
 
 function openBulkColorFlyout(anchorBtn: HTMLElement): void {

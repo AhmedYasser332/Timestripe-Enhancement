@@ -44,6 +44,7 @@ import type {
   ViewState,
 } from "../shared/types";
 import { resolveAssignments } from "../shared/inheritance";
+import { descendantsOf, effectiveColor, projectPath } from "../shared/project-tree";
 
 async function api(): Promise<TimestripeApi> {
   const key = await getApiKey();
@@ -137,13 +138,15 @@ async function getViewState(): Promise<ViewState> {
     const project = byId.get(res.projectId);
     if (project) {
       const overrideColor = overrides[goalId];
+      const path = projectPath(projectsList, res.projectId).map((p) => p.name).join(" › ");
       assignments[goalId] = {
         projectId: res.projectId,
         name: project.name,
-        color: overrideColor ?? project.color,
+        color: overrideColor ?? effectiveColor(projectsList, res.projectId),
         source: res.source,
         colorSource: overrideColor ? "override" : "project",
         overrideColor,
+        path,
       };
     }
   }
@@ -578,19 +581,52 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
   },
   CREATE_PROJECT: async (msg) => {
     const settings = await getSettings();
-    const targetSpace = msg.spaceId !== undefined ? msg.spaceId : (settings.activeSpaceId === "all" ? null : settings.activeSpaceId);
-    const project = newProject(msg.name, msg.color, targetSpace);
+    // Resolve the parent FIRST from a fresh read — a sub's scope ALWAYS comes
+    // from its parent (never from the active space), and a missing parent is
+    // a hard error instead of a silently mis-scoped project.
+    const all = await getAllProjects();
+    const parent = msg.parentId ? all.find((p) => p.id === msg.parentId) : undefined;
+    if (msg.parentId && !parent) throw new Error("Parent project not found");
+    const targetSpace = parent
+      ? (parent.spaceId ?? null)
+      : (msg.spaceId !== undefined ? msg.spaceId : (settings.activeSpaceId === "all" ? null : settings.activeSpaceId));
+    const project = newProject(msg.name, msg.color, targetSpace, msg.parentId ?? null);
     await upsertProjectWithScope(project);
     await broadcastStateChanged();
     return project;
   },
   UPDATE_PROJECT: async (msg) => {
     await upsertProjectWithScope(msg.project);
+    // Scope is inherited down the project tree: cascade the new scope to descendants
+    const all = await getAllProjects();
+    const nextScope = msg.project.spaceId ?? null;
+    for (const d of descendantsOf(all, msg.project.id)) {
+      if ((d.spaceId ?? null) !== nextScope) {
+        await upsertProjectWithScope({ ...d, spaceId: nextScope });
+      }
+    }
     await broadcastStateChanged();
     return msg.project;
   },
   DELETE_PROJECT: async (msg) => {
-    await removeProjectEverywhere(msg.projectId);
+    const all = await getAllProjects();
+    const target = all.find((p) => p.id === msg.projectId);
+    if (!target) return null;
+
+    if (msg.mode === "promote") {
+      // Lift children one level up into the deleted project's own position
+      const grandparentId = target.parentId ?? null;
+      for (const child of all.filter((p) => p.parentId === msg.projectId)) {
+        await upsertProjectWithScope({ ...child, parentId: grandparentId });
+      }
+      await removeProjectEverywhere(msg.projectId);
+    } else {
+      // Default: cascade — the project and its whole subtree disappear together
+      const ids = [msg.projectId, ...descendantsOf(all, msg.projectId).map((p) => p.id)];
+      for (const id of ids) {
+        await removeProjectEverywhere(id);
+      }
+    }
     await broadcastStateChanged();
     return null;
   },
