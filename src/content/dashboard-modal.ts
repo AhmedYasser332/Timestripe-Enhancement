@@ -200,7 +200,7 @@ function injectDashboardStyles(): void {
       justify-content: center;
       width: 36px;
       height: 36px;
-      margin: 8px auto 16px auto;
+      margin: 6px auto;
       border-radius: 8px;
       border: none;
       background: transparent;
@@ -209,6 +209,8 @@ function injectDashboardStyles(): void {
       transition: color 0.15s ease, background 0.15s ease;
       position: relative;
       flex-shrink: 0;
+      box-sizing: border-box;
+      align-self: center;
     }
     .tse-sidebar-btn:hover {
       color: #ffffff;
@@ -971,68 +973,144 @@ export function toggleDashboardModal(): void {
   }
 }
 
-/** Multi-strategy detector to find Timestripe's sidebar bottom section and insert our icon right above "+" */
+/**
+ * Multi-strategy detector to find Timestripe's sidebar bottom section and insert our icon right above "+"
+ * Vertical hierarchy in the left sidebar rail (x < 70px):
+ *   ... top items ...
+ *   [tse-sidebar-trigger]  <-- Injected directly above the "+" button
+ *   [+ button (circular)]
+ *   [Search 🔍]
+ *   [Settings ⚙️]
+ *   [Collapse ←]
+ */
 function findSidebarBottomTarget(): { container: HTMLElement; insertBeforeEl: HTMLElement | null } | null {
-  // Purge any trigger placed near Climbs, Colors, or outside the bottom 180px cluster
+  // Collect all interactive elements in the left rail dock (x < 70px, bottom 380px)
+  const railElements = Array.from(
+    document.querySelectorAll<HTMLElement>("button, [role='button'], a, div"),
+  ).filter((el) => {
+    if (el.id === "tse-sidebar-trigger") return false;
+    // Strictly exclude navigation links like Climbs (/climbs/), Colors, Boards
+    if (el.closest("a[href*='climbs'], a[href*='colors'], a[href*='horizons'], a[href*='boards']")) return false;
+    const r = el.getBoundingClientRect();
+    return (
+      r.left >= 0 &&
+      r.left < 70 &&
+      r.width >= 16 &&
+      r.width <= 60 &&
+      r.height >= 16 &&
+      r.height <= 60 &&
+      r.top > window.innerHeight - 380
+    );
+  });
+
+  // Identify Search element in the bottom rail
+  const searchEl = railElements.find((el) => {
+    const label = ((el.getAttribute("aria-label") ?? "") + " " + (el.getAttribute("title") ?? "") + " " + (el.textContent ?? "")).toLowerCase();
+    if (label.includes("search") || label.includes("⌕") || label.includes("🔍")) return true;
+    return Boolean(el.querySelector("svg") && (el.className.toLowerCase().includes("search") || el.getAttribute("data-test-id")?.includes("search")));
+  });
+
+  const searchTop = searchEl ? searchEl.getBoundingClientRect().top : window.innerHeight - 100;
+
+  // Identify the circular "+" button using explicit matching and relative position above Search
+  let bestPlus: HTMLElement | null = null;
+  let bestScore = -1;
+
+  for (const el of railElements) {
+    if (el === searchEl) continue;
+    const r = el.getBoundingClientRect();
+    const txt = (el.textContent ?? "").trim();
+    const label = ((el.getAttribute("aria-label") ?? "") + " " + (el.getAttribute("title") ?? "")).toLowerCase();
+    const cls = el.className.toLowerCase();
+
+    // Skip settings and collapse buttons
+    if (label.includes("setting") || label.includes("collapse") || label.includes("back") || txt === "⚙" || txt === "←") {
+      continue;
+    }
+
+    let score = 0;
+    // 1. Text is "+" or "⊕"
+    if (txt === "+" || txt === "⊕") score += 100;
+    // 2. Aria/title/class includes "add", "create", "new", "plus"
+    if (label.includes("add") || label.includes("create") || label.includes("new") || label.includes("plus")) score += 80;
+    if (cls.includes("add") || cls.includes("create") || cls.includes("plus")) score += 60;
+    // 3. Circular styling (Timestripe "+" button is a circle)
+    const cs = window.getComputedStyle(el);
+    if (cs.borderRadius === "50%" || parseFloat(cs.borderRadius) >= 14) score += 50;
+    // 4. Positioned above Search within 120px
+    if (r.top < searchTop && r.top > searchTop - 120) score += 40;
+    // 5. Button tag preference
+    if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") score += 20;
+
+    if (score > bestScore && score >= 40) {
+      bestScore = score;
+      bestPlus = el;
+    }
+  }
+
+  // Fallback: the element directly above Search in the bottom rail
+  if (!bestPlus) {
+    const aboveSearch = railElements
+      .filter((el) => {
+        if (el === searchEl) return false;
+        const r = el.getBoundingClientRect();
+        return r.top < searchTop && r.top > searchTop - 140;
+      })
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    if (aboveSearch.length > 0) {
+      bestPlus = aboveSearch[0];
+    }
+  }
+
+  // If still not found, take the topmost button in the bottom dock
+  if (!bestPlus) {
+    if (railElements.length === 0) return null;
+    const candidates = railElements.filter((el) => el !== searchEl);
+    candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    bestPlus = candidates[0] ?? railElements[0];
+  }
+
+  // Check existing trigger placement: if already docked right above the plus button, keep it!
   const existing = document.getElementById("tse-sidebar-trigger");
   if (existing) {
-    const r = existing.getBoundingClientRect();
+    const exRect = existing.getBoundingClientRect();
     const isNearNavLinks = Boolean(
       existing.closest("a, [href]") ||
       existing.parentElement?.querySelector("a[href*='climbs'], a[href*='colors'], a[href*='horizons'], a[href*='boards']"),
     );
-    if (r.top < window.innerHeight - 185 || isNearNavLinks) {
+
+    // If placed side-by-side with Search on the same row, purge immediately!
+    const isSameRowAsSearch = searchEl && Math.abs(exRect.top - searchEl.getBoundingClientRect().top) < 18;
+    // If placed below plus, purge immediately!
+    const isBelowPlus = bestPlus && exRect.top > bestPlus.getBoundingClientRect().top;
+
+    if (isNearNavLinks || isSameRowAsSearch || isBelowPlus || exRect.left > 70 || exRect.top < window.innerHeight - 450) {
       existing.remove();
-    } else {
-      return null; // Already correctly docked above the bottom "+"
+    } else if (bestPlus && exRect.top < bestPlus.getBoundingClientRect().top) {
+      return null; // Already correctly placed directly above the plus button!
     }
   }
 
-  // 1. Strictly target buttons in the bottom-most 180px dock (x < 60px).
-  // Navigation links like Climbs (/climbs/), Colors, Boards are <a> tags and are strictly EXCLUDED.
-  const dockButtons = Array.from(
-    document.querySelectorAll<HTMLElement>("button, [role='button']"),
-  ).filter((el) => {
-    if (el.closest("a, [href]")) return false; // never attach to navigation links
-    if (el.id === "tse-sidebar-trigger") return false;
-    const r = el.getBoundingClientRect();
-    return (
-      r.left >= 0 &&
-      r.left < 60 &&
-      r.width >= 16 &&
-      r.width <= 50 &&
-      r.height >= 16 &&
-      r.height <= 50 &&
-      r.top > window.innerHeight - 185
-    );
-  });
+  // Resolve vertical column container: if bestPlus is inside a horizontal flex row,
+  // walk up to the vertical parent so our button sits in its OWN row above the entire plus row!
+  let current: HTMLElement = bestPlus;
+  let container: HTMLElement = bestPlus.parentElement ?? bestPlus;
 
-  if (dockButtons.length === 0) return null;
-
-  // Try to find the explicit "+" button first (by text content, SVG path, or aria/title)
-  const explicitPlus = dockButtons.find((el) => {
-    const txt = (el.textContent ?? "").trim();
-    if (txt === "+" || txt === "⊕") return true;
-    const label = ((el.getAttribute("aria-label") ?? "") + (el.getAttribute("title") ?? "")).toLowerCase();
-    if (label.includes("add") || label.includes("create") || label.includes("new")) return true;
-    return false;
-  });
-
-  if (explicitPlus) {
-    return {
-      container: explicitPlus.parentElement ?? explicitPlus,
-      insertBeforeEl: explicitPlus,
-    };
+  while (current.parentElement && current.parentElement !== document.body) {
+    const parent = current.parentElement;
+    const parentStyle = window.getComputedStyle(parent);
+    if (parentStyle.display === "flex" && (parentStyle.flexDirection === "row" || parentStyle.flexDirection === "row-reverse")) {
+      current = parent;
+      container = parent.parentElement ?? parent;
+      continue;
+    }
+    container = parent;
+    break;
   }
 
-  // Fallback: in Timestripe's bottom dock, the items from bottom to top are:
-  // [Collapse ←] -> [Settings ⚙️] -> [Search 🔍] -> [Plus +]
-  // Sort ascending by vertical position (top): the topmost of this bottom cluster is the plus button!
-  dockButtons.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-  const plusBtn = dockButtons[0];
   return {
-    container: plusBtn.parentElement ?? plusBtn,
-    insertBeforeEl: plusBtn,
+    container,
+    insertBeforeEl: current,
   };
 }
 
