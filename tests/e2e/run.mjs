@@ -1,0 +1,368 @@
+/**
+ * Playwright E2E harness for the Timestripe Enhancement extension.
+ *
+ * Loads the REAL built extension (dist/) into Chromium, serves a local
+ * Timestripe-like fixture at https://timestripe.com/app (route-fulfilled),
+ * mocks the /api/v3/ endpoints INSIDE the service worker, seeds
+ * chrome.storage, then drives every major UI flow end-to-end and prints a
+ * PASS/FAIL summary.
+ *
+ * Run: npm run build && node tests/e2e/run.mjs   (HEADLESS=0 for a visible window)
+ */
+
+import { chromium } from "playwright";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, "..", "..");
+const DIST = path.join(ROOT, "dist");
+const FIXTURE = readFileSync(path.join(__dirname, "fixture.html"), "utf8");
+
+const HEADLESS = process.env.HEADLESS !== "0";
+
+// Mock data seeded into the service worker (initial state only)
+const MOCK_SPACES = [
+  { id: "sp1", name: "دنيا" },
+  { id: "sp2", name: "EXT-TEST" },
+];
+const MOCK_GOALS = [
+  { id: "AAAAAAAA", name: "7:30 to 12:45", date: "2026-10-05", space_id: "sp1", parent_id: null },
+  { id: "BBBBBBBB", name: "1.5 hrs Medo", date: "2026-10-06", space_id: "sp1", parent_id: null },
+  { id: "CCCCCCCC", name: "1.0 hrs Next.js", date: null, space_id: "sp1", parent_id: null },
+  { id: "DDDDDDDD", name: "0.5 hrs Business", date: "2026-10-10", space_id: "sp2", parent_id: null },
+  { id: "EEEEEEEE", name: "مراجعة النص الثقيل من البرزة", date: null, space_id: "sp1", parent_id: null },
+];
+
+/**
+ * Fully self-contained fetch replacement evaluated INSIDE the extension
+ * service worker. No external references — everything is embedded.
+ */
+const SW_PATCH_SRC = `
+(() => {
+  if (self.__mockInstalled) return;
+  self.__mockInstalled = true;
+  self.__mockHits = 0;
+  const spaces = ${JSON.stringify(MOCK_SPACES)};
+  const goals = ${JSON.stringify(MOCK_GOALS)};
+
+  function handler(pathname, method, bodyObj) {
+    self.__mockHits++;
+    if (pathname.endsWith("users/me/")) {
+      return { status: 200, body: { id: "u1", email: "t@t.com", first_name: "Test", last_name: "User" } };
+    }
+    if (pathname.endsWith("spaces/")) return { status: 200, body: { results: spaces } };
+    if (pathname.startsWith("goals/") && pathname.includes("space_id=")) {
+      return { status: 200, body: { results: goals, next: null } };
+    }
+    const m = /^goals\\/([A-Za-z0-9]{8})\\/?$/.exec(pathname);
+    if (m) {
+      const goal = goals.find((g) => g.id === m[1]);
+      if (method === "GET") return goal ? { status: 200, body: goal } : { status: 404, body: {} };
+      if (method === "PATCH" && goal && bodyObj) { Object.assign(goal, bodyObj); return { status: 200, body: goal }; }
+      if (method === "DELETE") return { status: 204, body: "" };
+    }
+    if (pathname === "goals/" && method === "POST" && bodyObj) {
+      const id = Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+      const goal = { id, name: "", date: null, space_id: "sp1", parent_id: null, ...bodyObj };
+      goals.push(goal);
+      return { status: 201, body: goal };
+    }
+    return { status: 404, body: {} };
+  }
+
+  const realFetch = self.fetch.bind(self);
+  self.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const m = /^https:\\/\\/timestripe\\.com\\/api\\/v3\\/(.*)$/.exec(url);
+    if (m) {
+      const method = (init?.method ?? "GET").toUpperCase();
+      let bodyObj = null;
+      if (init?.body) { try { bodyObj = JSON.parse(init.body); } catch { bodyObj = null; } }
+      const { status, body } = handler(m[1], method, bodyObj);
+      return Promise.resolve(
+        new Response(status === 204 ? null : JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return realFetch(input, init);
+  };
+})();
+`;
+
+// ---------------------------------------------------------------------------
+// Tiny test framework
+// ---------------------------------------------------------------------------
+const results = [];
+async function step(name, fn) {
+  try {
+    await fn();
+    results.push(["PASS", name, ""]);
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    results.push(["FAIL", name, msg]);
+    const tail = msg.split("\n").filter(Boolean).slice(-3).join(" ⏎ ");
+    console.log(`  ✗ ${name} — ${tail.slice(0, 600)}`);
+  }
+}
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg ?? "assertion failed");
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+const context = await chromium.launchPersistentContext("", {
+  channel: "chromium",
+  headless: HEADLESS,
+  args: [
+    `--disable-extensions-except=${DIST}`,
+    `--load-extension=${DIST}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+  ],
+  viewport: { width: 1440, height: 900 },
+});
+
+async function getSW() {
+  let sw = context.serviceWorkers().at(-1);
+  if (!sw) sw = await context.waitForEvent("serviceworker", { timeout: 15000 });
+  return sw;
+}
+const patchSW = async (sw) => {
+  try {
+    await sw.evaluate(SW_PATCH_SRC);
+  } catch (e) {
+    console.log(`  [warn] SW patch failed: ${String(e).split("\n")[0]}`);
+  }
+};
+
+// 1. Patch + seed the service worker BEFORE any page exists
+const sw0 = await getSW();
+await patchSW(sw0);
+context.on("serviceworker", (sw) => void patchSW(sw));
+await sw0.evaluate(async () => {
+  await chrome.storage.local.set({
+    apiKey: "test-key",
+    settings: { activeSpaceId: "sp1", colorMode: "strip", showProjectName: true },
+    "data:sp1": {
+      projects: [
+        { id: "proj1", name: "Work", color: "#00A8FF", spaceId: "sp1" },
+        { id: "proj2", name: "Life", color: "#00E676", spaceId: null },
+      ],
+      taskProjectLinks: {},
+      taskColorOverrides: {},
+    },
+    "data:global": { projects: [], taskProjectLinks: {}, taskColorOverrides: {} },
+  });
+});
+
+// 2. Serve the fixture document at the real Timestripe URL (content script matches)
+await context.route("https://timestripe.com/app*", (route) => route.fulfill({ contentType: "text/html", body: FIXTURE }));
+
+const page = await context.newPage();
+const pageErrors = [];
+page.on("pageerror", (err) => pageErrors.push(String(err)));
+
+await page.goto("https://timestripe.com/app");
+await page.waitForSelector("#tse-sidebar-trigger", { timeout: 15000 });
+const swHits = await sw0.evaluate(() => self.__mockHits ?? 0).catch(() => -1);
+console.log(`  [info] mock API hits after page load: ${swHits}`);
+
+console.log("\n=== Timestripe Enhancement — Playwright E2E ===\n");
+
+// ------------------------- Sidebar & shortcuts -------------------------
+await step("T1 sidebar trigger is injected in the bottom-left cluster", async () => {
+  const box = await page.locator("#tse-sidebar-trigger").boundingBox();
+  assert(box, "trigger not found");
+  assert(box.x < 65, `trigger x=${box.x} should be < 65`);
+  assert(box.y > 900 - 250, `trigger y=${box.y} should be in bottom 250px`);
+});
+
+await step("T2 double-K opens the dashboard; Esc closes it", async () => {
+  await page.keyboard.press("k");
+  await page.keyboard.press("k");
+  await page.waitForSelector(".tse-dash-overlay", { timeout: 3000 });
+  await page.keyboard.press("Escape");
+  await sleep(200);
+  assert((await page.locator(".tse-dash-overlay").count()) === 0, "overlay should close on Esc");
+});
+
+await step("T3 sidebar button opens the dashboard again", async () => {
+  await page.click("#tse-sidebar-trigger");
+  await page.waitForSelector(".tse-dash-overlay", { timeout: 3000 });
+});
+
+// ------------------------- Projects panel -------------------------
+await step("T4 space chips exist and react instantly (دنيا → active)", async () => {
+  await page.waitForSelector("#tse-new-project-scopes .tse-chip[data-scope='sp1']", { timeout: 5000 });
+  await page.click("#tse-new-project-scopes .tse-chip[data-scope='sp1']");
+  const cls = await page.getAttribute("#tse-new-project-scopes .tse-chip[data-scope='sp1']", "class");
+  assert(cls.includes("active"), `دنيا chip should be active, got "${cls}"`);
+  const globalCls = await page.getAttribute("#tse-new-project-scopes .tse-chip[data-scope='global']", "class");
+  assert(!globalCls.includes("active"), "global chip should have lost active");
+});
+
+await step("T5 Add Project creates a row", async () => {
+  await page.fill("#tse-panel-projects input.tse-input", "Playwright Project");
+  await page.click("#tse-panel-projects .tse-btn-primary");
+  await page.waitForSelector(".tse-project-row:has-text('Playwright Project')", { timeout: 5000 });
+});
+
+await step("T6 project color dot opens palette and changes the color", async () => {
+  const row = page.locator(".tse-project-row", { hasText: "Playwright Project" });
+  await row.locator(".tse-project-dot-btn").click();
+  await page.waitForSelector(".tse-color-pop", { timeout: 3000 });
+  await page.click(".tse-color-pop .tse-color-pop-swatch[title='#FF3D00']");
+  await sleep(400);
+  const bg = await row.locator(".tse-project-dot").evaluate((el) => el.style.background);
+  assert(bg.includes("255, 61, 0"), `dot should become #FF3D00, got ${bg}`);
+});
+
+await step("T7 pencil renames a project inline", async () => {
+  const row = page.locator(".tse-project-row", { hasText: "Playwright Project" });
+  await row.locator(".tse-icon-btn").click();
+  // the row's text is replaced by the input, so locate the input globally
+  const input = page.locator(".tse-rename-input");
+  await input.waitFor({ timeout: 3000 });
+  await input.fill("Renamed Proj");
+  await input.press("Enter");
+  await page.waitForSelector(".tse-project-row:has-text('Renamed Proj')", { timeout: 5000 });
+});
+
+// ------------------------- Tabs / Settings -------------------------
+await step("T8 tab switch to Settings is instant (0ms display toggle)", async () => {
+  await page.click(".tse-dash-tab:has-text('Settings & Appearance')");
+  const display = await page.evaluate(() => getComputedStyle(document.querySelector("#tse-panel-settings")).display);
+  assert(display === "flex", `panel display should be flex, got ${display}`);
+});
+
+await step("T9 Active Space chips switch (EXT-TEST → active)", async () => {
+  await page.click("#tse-panel-settings .tse-chip[data-space='sp2']");
+  const cls = await page.getAttribute("#tse-panel-settings .tse-chip[data-space='sp2']", "class");
+  assert(cls.includes("active"), `EXT-TEST chip should be active, got "${cls}"`);
+  const toast = await page.locator(".tse-toast").last().textContent().catch(() => null);
+  assert(toast && toast.includes("EXT-TEST"), `toast should mention EXT-TEST, got "${toast}"`);
+});
+
+await step("T10 mode cards toggle (Strip Mode selected)", async () => {
+  await page.click(".tse-mode-card:has-text('Strip Mode')");
+  const cls = await page.getAttribute(".tse-mode-card:has-text('Strip Mode')", "class");
+  assert(cls.includes("selected"), "Strip Mode card should be selected");
+});
+
+await step("T11 Templates tab renders", async () => {
+  await page.click(".tse-dash-tab:has-text('Templates')");
+  await page.waitForSelector("#tse-panel-templates .tse-card", { timeout: 3000 });
+});
+
+await step("T12 marquee drag cannot start inside the open dashboard", async () => {
+  await page.click(".tse-dash-tab:has-text('Projects')");
+  await page.mouse.move(720, 120); // overlay area above the modal box
+  await page.mouse.down();
+  await page.mouse.move(1000, 500, { steps: 5 });
+  await page.mouse.up();
+  await sleep(200);
+  assert((await page.locator("#tse-marquee-box").count()) === 0, "marquee box must not exist while modal open");
+  // dragging the dimmed backdrop closes the dashboard (native behavior)
+  assert((await page.locator(".tse-dash-overlay").count()) === 0, "dashboard should close after backdrop drag");
+});
+
+// ------------------------- Selection & Scheduler -------------------------
+await step("T13 row checkboxes open the Selection Manager bar", async () => {
+  // Checkboxes are hover-revealed by design — hover, then click
+  const rowA = page.locator(".GoalRowWrapper[data-draggable-id='col1::goal:AAAAAAAA']");
+  await rowA.hover();
+  await rowA.locator(".tse-select-btn").click();
+  const rowB = page.locator(".GoalRowWrapper[data-draggable-id='col1::goal:BBBBBBBB']");
+  await rowB.hover();
+  await rowB.locator(".tse-select-btn").click();
+  await page.waitForSelector("#tse-selection-bar", { timeout: 3000 });
+});
+
+await step("T14 Schedule… opens the Fast Day Scheduler", async () => {
+  await page.click("#tse-selection-bar .tse-bar-btn:has-text('Schedule…')");
+  await page.waitForSelector(".tse-sched-modal-box", { timeout: 8000 });
+  const title = await page.locator(".tse-modal-title span").first().textContent();
+  assert(title.includes("2 tasks"), `title should say 2 tasks, got "${title}"`);
+});
+
+await step("T15 anchor button opens the native-style calendar", async () => {
+  await page.click(".tse-sched-anchor-btn");
+  await page.waitForSelector(".tse-cal-pop", { timeout: 3000 });
+  const year = await page.locator(".tse-cal-navrow .tse-cal-navlabel").first().textContent();
+  const month = await page.locator(".tse-cal-navrow .tse-cal-navlabel").nth(1).textContent();
+  assert(year === "2026", `year should be 2026, got ${year}`);
+  assert(month === "October", `month should be October, got ${month}`);
+  const wk = await page.locator(".tse-cal-wk").nth(1).textContent();
+  assert(/^W\d+$/.test(wk ?? ""), `week rows should render W##, got "${wk}"`);
+});
+
+await step("T16 picking a day updates the anchor label", async () => {
+  await page.click(".tse-cal-day[data-date='2026-10-15']");
+  await sleep(150);
+  const label = await page.locator(".tse-sched-anchor-btn").textContent();
+  assert(label.includes("Oct 15"), `anchor should show Oct 15, got "${label}"`);
+});
+
+await step("T17 'One per week' distributes weekly from the anchor", async () => {
+  await page.click(".tse-sched-quick-btn:has-text('One per week')");
+  await sleep(150);
+  const first = await page.locator(".tse-sched-row").first().locator(".tse-sched-date-btn").textContent();
+  const second = await page.locator(".tse-sched-row").nth(1).locator(".tse-sched-date-btn").textContent();
+  assert(first.includes("Oct 15"), `first row should be Oct 15, got "${first}"`);
+  assert(second.includes("Oct 22"), `second row should be Oct 22, got "${second}"`);
+});
+
+await step("T18 per-row calendar quick pill 'tomorrow' works", async () => {
+  await page.locator(".tse-sched-row").nth(1).locator(".tse-sched-date-btn").click();
+  await page.waitForSelector(".tse-cal-pop", { timeout: 3000 });
+  await page.click(".tse-cal-pill:has-text('tomorrow')");
+  await sleep(150);
+  const after = await page.locator(".tse-sched-row").nth(1).locator(".tse-sched-date-btn").textContent();
+  const tmrw = new Date(Date.now() + 86400000); // the pill means literal tomorrow
+  const expected = `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][tmrw.getMonth()]} ${tmrw.getDate()}`;
+  assert(after.includes(expected), `row should be tomorrow (${expected}), got "${after}"`);
+});
+
+await step("T19 Apply Schedule PATCHes both goals and closes", async () => {
+  const before = await sw0.evaluate(() => self.__mockHits ?? 0);
+  await page.click(".tse-sched-modal-box .tse-btn-primary");
+  await sleep(600);
+  assert((await page.locator(".tse-sched-modal-box").count()) === 0, "scheduler should close after apply");
+  const after = await sw0.evaluate(() => self.__mockHits ?? 0);
+  assert(after >= before + 2, `expected ≥2 new API hits, got ${after - before}`);
+});
+
+await step("T20 Ctrl+Z undoes the schedule", async () => {
+  await page.keyboard.press("Control+z");
+  await sleep(800);
+  const toast = await page.locator(".tse-toast").last().textContent().catch(() => "");
+  assert(/undid/i.test(toast ?? ""), `toast should say "Undid…", got "${toast}"`);
+});
+
+// ------------------------- Console errors -------------------------
+await step("T21 no page JS errors during the whole run", async () => {
+  const realErrors = pageErrors.filter((e) => !e.includes("ResizeObserver"));
+  assert(realErrors.length === 0, `page errors: ${realErrors.slice(0, 3).join(" | ")}`);
+});
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+console.log("\n=== SUMMARY ===");
+const failed = results.filter(([s]) => s === "FAIL");
+for (const [status, name, msg] of results) {
+  if (status === "FAIL") console.log(`FAIL  ${name}\n      ${msg.split("\n")[0]}`);
+}
+console.log(`\n${results.length - failed.length}/${results.length} steps passed.`);
+const totalHits = await sw0.evaluate(() => self.__mockHits ?? -1).catch(() => -1);
+console.log(`Mock API hits: ${totalHits}`);
+
+await context.close();
+if (failed.length > 0) process.exit(1);

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Secrets — NEVER commit (contains the personal Timestripe API key)
+.env.local
+.env.*.local
+
+*.log
+.DS_Store
+Thumbs.db

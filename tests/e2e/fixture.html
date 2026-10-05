@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Timestripe — Fixture</title>
+<style>
+  body { margin: 0; background: #191919; color: #eeeeee; font-family: system-ui, sans-serif; }
+  #root { min-height: 100vh; }
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; width: 64px;
+    background: #111111; display: flex; flex-direction: column;
+    justify-content: flex-end; align-items: center; padding-bottom: 14px; gap: 8px;
+  }
+  .sb-btn {
+    width: 36px; height: 36px; border-radius: 8px; background: #232323; color: #cccccc;
+    display: flex; align-items: center; justify-content: center; font-size: 18px; border: none;
+  }
+  .board { padding: 40px 120px 320px 130px; }
+  .board h1 { font-size: 16px; font-weight: 600; color: #dddddd; }
+  .GoalRowWrapper {
+    display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px;
+    border-radius: 8px; margin: 4px 0; background: #202020; width: 560px; box-sizing: border-box;
+  }
+  .GoalRow { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .GoalRow-content { display: flex; align-items: center; gap: 10px; flex: 1; }
+  .GoalRow-title { font-size: 14px; }
+  .board-empty { height: 420px; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="sidebar">
+    <button class="sb-btn" id="sb-plus">+</button>
+    <button class="sb-btn" id="sb-search">⌕</button>
+    <button class="sb-btn" id="sb-settings">⚙</button>
+    <button class="sb-btn" id="sb-back">←</button>
+  </div>
+  <div class="board" id="board">
+    <h1>Today</h1>
+    <div class="GoalRowWrapper" data-draggable-id="col1::goal:AAAAAAAA">
+      <div class="GoalRow"><div class="GoalRow-content"><span class="GoalRow-title">7:30 to 12:45</span></div></div>
+    </div>
+    <div class="GoalRowWrapper" data-draggable-id="col1::goal:BBBBBBBB">
+      <div class="GoalRow"><div class="GoalRow-content"><span class="GoalRow-title">1.5 hrs Medo</span></div></div>
+    </div>
+    <div class="GoalRowWrapper" data-draggable-id="col1::goal:CCCCCCCC">
+      <div class="GoalRow"><div class="GoalRow-content"><span class="GoalRow-title">1.0 hrs Next.js</span></div></div>
+    </div>
+    <div class="GoalRowWrapper" data-draggable-id="col1::goal:DDDDDDDD">
+      <div class="GoalRow"><div class="GoalRow-content"><span class="GoalRow-title">0.5 hrs Business</span></div></div>
+    </div>
+    <div class="GoalRowWrapper" data-draggable-id="col1::goal:EEEEEEEE">
+      <div class="GoalRow"><div class="GoalRow-content"><span class="GoalRow-title">مراجعة النص الثقيل من البرزة</span></div></div>
+    </div>
+    <div class="board-empty" id="board-empty"></div>
+  </div>
+</div>
+</body>
+</html>
