@@ -332,6 +332,15 @@ export function SettingsTab({ settings, onSettingsChanged }: Props): React.JSX.E
             onChange={(e) => void patchSettings({ showProjectName: e.target.checked })}
           />
         </label>
+
+        <label className="toggle-row" style={{ marginTop: "8px" }}>
+          <span>Auto-complete parent goal when all subgoals are checked</span>
+          <input
+            type="checkbox"
+            checked={settings?.autoCompleteParent ?? true}
+            onChange={(e) => void patchSettings({ autoCompleteParent: e.target.checked })}
+          />
+        </label>
       </div>
 
       {/* Backup & Restore Card */}

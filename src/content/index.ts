@@ -16,6 +16,7 @@ import { initMarqueeSelection } from "./marquee";
 import { initGlobalHistoryShortcuts } from "./history";
 import { scanAndInjectEditorToolbar } from "./editor-toolbar";
 import { initDashboardShortcut, injectSidebarButton } from "./dashboard-modal";
+import { initAutoComplete } from "./auto-complete";
 
 function renderAll(): void {
   const viewState = getViewState();
@@ -50,6 +51,7 @@ initMarqueeSelection();
 initGlobalHistoryShortcuts();
 initDashboardShortcut();
 injectSidebarButton();
+initAutoComplete();
 
 // Live reactive state: when settings change (strip ↔ full, project name toggle)
 // or projects/assignments change, this callback runs IMMEDIATELY.

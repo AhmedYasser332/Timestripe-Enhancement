@@ -469,7 +469,7 @@ await step("T20b delete dialog promote lifts فقه to top level", async () => {
   await sleep(200);
 });
 
-// ------------------------- Popup Parity -------------------------
+// ------------------------- Popup Parity & Auto-complete -------------------------
 await step("T22 extension popup renders tree hierarchy with rails and parent select", async () => {
   const extId = sw0.url().split("/")[2];
   const popupPage = await context.newPage();
@@ -479,6 +479,19 @@ await step("T22 extension popup renders tree hierarchy with rails and parent sel
   assert(rowsCount >= 2, `popup should list the projects, got ${rowsCount}`);
   const parentSelect = popupPage.locator(".add-project-card select");
   assert((await parentSelect.count()) === 1, "parent select should exist in popup");
+
+  // Verify AUTO_COMPLETE_PARENT handler responds properly
+  const acRes = await popupPage.evaluate(async () => {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { type: "AUTO_COMPLETE_PARENT", goalId: "BBBBBBBB", checked: true },
+        (res) => resolve(res),
+      );
+    });
+  });
+  assert(acRes, "should receive response from AUTO_COMPLETE_PARENT");
+  assert(acRes.ok, "AUTO_COMPLETE_PARENT response should be ok");
+
   await popupPage.close();
 });
 

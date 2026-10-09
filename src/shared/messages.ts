@@ -63,6 +63,15 @@ export type SetTaskTextConfigMessage = {
   goalIds: string[];
   patch: Partial<TaskTextConfig> | null;
 };
+export type AutoCompleteParentMessage = {
+  type: "AUTO_COMPLETE_PARENT";
+  goalId: string;
+  checked: boolean;
+};
+export type AutoCompleteParentResult = {
+  parentIdsToCheck: string[];
+  parentIdsToUncheck: string[];
+};
 export type ExportBackupMessage = { type: "EXPORT_BACKUP" };
 export type RefreshBackupMessage = { type: "REFRESH_BACKUP" };
 export type ImportBackupMessage = {
@@ -112,6 +121,7 @@ export type BgMessage =
   | DeleteTemplateMessage
   | ApplyTemplateMessage
   | SetTaskTextConfigMessage
+  | AutoCompleteParentMessage
   | ExportBackupMessage
   | RefreshBackupMessage
   | ImportBackupMessage
@@ -157,6 +167,7 @@ export type BgResponseMap = {
   DELETE_TEMPLATE: null;
   APPLY_TEMPLATE: SmartDuplicateResult;
   SET_TASK_TEXT_CONFIG: null;
+  AUTO_COMPLETE_PARENT: AutoCompleteParentResult;
   EXPORT_BACKUP: BackupPayload;
   REFRESH_BACKUP: { backup: BackupPayload; prunedTotal: number; prunedLinks: number };
   IMPORT_BACKUP: { restoredProjects: number; restoredTemplates: number };

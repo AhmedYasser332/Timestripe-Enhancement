@@ -2355,6 +2355,26 @@ function renderSettingsPanel(
     };
   }
   appCard.appendChild(toggleLabel);
+
+  // Toggle auto-complete parent goals when all subgoals are checked
+  const autoParentLabel = document.createElement("label");
+  autoParentLabel.style.display = "flex";
+  autoParentLabel.style.alignItems = "center";
+  autoParentLabel.style.justifyContent = "space-between";
+  autoParentLabel.style.cursor = "pointer";
+  autoParentLabel.style.fontSize = "12.5px";
+  autoParentLabel.style.marginTop = "8px";
+  autoParentLabel.innerHTML = `
+    <span>Auto-complete parent goal when all subgoals are checked</span>
+    <input type="checkbox" ${settings.autoCompleteParent !== false ? "checked" : ""} style="cursor:pointer;" />
+  `;
+  const autoChk = autoParentLabel.querySelector("input");
+  if (autoChk) {
+    autoChk.onchange = async () => {
+      await sendToBg({ type: "SET_SETTINGS", patch: { autoCompleteParent: autoChk.checked } });
+    };
+  }
+  appCard.appendChild(autoParentLabel);
   panel.appendChild(appCard);
 
   // 3. Backup & Restore Card

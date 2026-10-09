@@ -82,6 +82,7 @@ export interface Settings {
   activeSpaceId: string | null;
   colorMode: "strip" | "full";
   showProjectName: boolean;
+  autoCompleteParent: boolean;
 }
 
 export type AssignmentSource = "explicit" | "inherited";

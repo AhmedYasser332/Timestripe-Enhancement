@@ -559,6 +559,103 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     await broadcastStateChanged();
     return null;
   },
+  AUTO_COMPLETE_PARENT: async (msg) => {
+    const settings = await getSettings();
+    if (settings.autoCompleteParent === false) {
+      return { parentIdsToCheck: [], parentIdsToUncheck: [] };
+    }
+
+    let client: TimestripeApi;
+    try {
+      client = await api();
+    } catch {
+      return { parentIdsToCheck: [], parentIdsToUncheck: [] };
+    }
+
+    const spaceId = settings.activeSpaceId ?? (await requireActiveSpaceId());
+    let goals: TSGoal[] = [];
+    try {
+      if (spaceId === "all") {
+        const spaces = await client.listSpaces();
+        const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
+        goals = lists.flat();
+      } else {
+        goals = await client.listGoals(spaceId);
+      }
+    } catch {
+      return { parentIdsToCheck: [], parentIdsToUncheck: [] };
+    }
+
+    const byId = new Map(goals.map((g) => [g.id, g]));
+    const childrenByParent = new Map<string, TSGoal[]>();
+    for (const g of goals) {
+      if (g.parent_id) {
+        const list = childrenByParent.get(g.parent_id) ?? [];
+        list.push(g);
+        childrenByParent.set(g.parent_id, list);
+      }
+    }
+
+    const target = byId.get(msg.goalId);
+    if (!target || !target.parent_id) {
+      return { parentIdsToCheck: [], parentIdsToUncheck: [] };
+    }
+
+    // Reflect the current user action in memory immediately
+    target.checked = msg.checked;
+
+    const parentIdsToCheck: string[] = [];
+    const parentIdsToUncheck: string[] = [];
+
+    if (msg.checked) {
+      // Subgoal was checked: walk UP ancestors. If all subgoals of ancestor are checked, check ancestor!
+      let currParentId: string | null = target.parent_id;
+      while (currParentId) {
+        const parent = byId.get(currParentId);
+        if (!parent) break;
+
+        const subgoals = childrenByParent.get(currParentId) ?? [];
+        if (subgoals.length === 0) break;
+
+        const allDone = subgoals.every((s) => s.checked);
+        if (allDone) {
+          if (!parent.checked) {
+            try {
+              await client.updateGoal(parent.id, { checked: true });
+              parent.checked = true;
+              parentIdsToCheck.push(parent.id);
+            } catch (err) {
+              console.warn("[TSE] auto-complete parent failed", parent.id, err);
+            }
+          }
+          // Move up to check the grandparent!
+          currParentId = parent.parent_id;
+        } else {
+          break;
+        }
+      }
+    } else {
+      // Subgoal was UNchecked: any checked ancestor that has this subgoal can no longer be complete!
+      let currParentId: string | null = target.parent_id;
+      while (currParentId) {
+        const parent = byId.get(currParentId);
+        if (!parent) break;
+
+        if (parent.checked) {
+          try {
+            await client.updateGoal(parent.id, { checked: false });
+            parent.checked = false;
+            parentIdsToUncheck.push(parent.id);
+          } catch (err) {
+            console.warn("[TSE] auto-uncheck parent failed", parent.id, err);
+          }
+        }
+        currParentId = parent.parent_id;
+      }
+    }
+
+    return { parentIdsToCheck, parentIdsToUncheck };
+  },
   EXPORT_BACKUP: async () => {
     const aliveGoalIds = await getAliveGoalIds();
     await pruneOrphanedStorageData(aliveGoalIds);

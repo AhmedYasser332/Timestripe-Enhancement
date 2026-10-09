@@ -73,6 +73,66 @@ export function goalIdFromEventTarget(target: EventTarget | null): string | null
   return el ? goalIdFromWrapper(el) : null;
 }
 
+export function getNativeGoalCheckbox(wrapperOrRow: HTMLElement): HTMLElement | null {
+  // 1. Native Timestripe checkbox with role="checkbox"
+  const roleCb = wrapperOrRow.querySelector<HTMLElement>('[role="checkbox"]');
+  if (roleCb) return roleCb;
+
+  // 2. Standard input checkbox (excluding TSE custom checkboxes)
+  const inputCb = wrapperOrRow.querySelector<HTMLInputElement>(
+    'input[type="checkbox"]:not(.tse-select-btn):not([class*="tse-"])',
+  );
+  if (inputCb) return inputCb;
+
+  // 3. Button or element with class containing check
+  const classCb = wrapperOrRow.querySelector<HTMLElement>(
+    'button[class*="check" i]:not([class*="tse-"]), div[class*="Checkbox" i]:not([class*="tse-"]), [class*="GoalCheckbox" i]',
+  );
+  if (classCb) return classCb;
+
+  return null;
+}
+
+export function isGoalChecked(wrapperOrRow: HTMLElement): boolean {
+  const cb = getNativeGoalCheckbox(wrapperOrRow);
+  if (cb) {
+    if (cb.getAttribute("aria-checked") === "true") return true;
+    if (cb instanceof HTMLInputElement && cb.checked) return true;
+    if (
+      cb.classList.contains("checked") ||
+      cb.classList.contains("is-checked") ||
+      cb.classList.contains("_checked") ||
+      cb.classList.contains("_is_done") ||
+      cb.classList.contains("is-done") ||
+      cb.classList.contains("_done")
+    ) {
+      return true;
+    }
+    // An SVG inside the native checkbox is Timestripe's checkmark icon
+    if (cb.querySelector("svg")) return true;
+  }
+
+  const row = wrapperOrRow.classList.contains("GoalRow")
+    ? wrapperOrRow
+    : wrapperOrRow.querySelector(".GoalRow");
+  if (row) {
+    for (const cls of Array.from(row.classList)) {
+      if (/done|completed|checked/i.test(cls)) return true;
+    }
+  }
+  for (const cls of Array.from(wrapperOrRow.classList)) {
+    if (/done|completed|checked/i.test(cls)) return true;
+  }
+
+  const title = wrapperOrRow.querySelector(".GoalRow-title, [class*='title' i]");
+  if (title) {
+    const cs = window.getComputedStyle(title);
+    if (cs.textDecorationLine.includes("line-through")) return true;
+  }
+
+  return false;
+}
+
 function isTseNode(node: Node): boolean {
   if (node.nodeType === Node.TEXT_NODE) {
     const parent = node.parentElement;
