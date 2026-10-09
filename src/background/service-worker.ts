@@ -7,6 +7,7 @@ import { addDays, computeDayOffset } from "../shared/dates";
 import { err, ok } from "../shared/messages";
 import type {
   ApiResult,
+  BackupPayload,
   BgMessage,
   BgResponseMap,
   BulkDeleteResult,
@@ -22,6 +23,7 @@ import {
   getProjectsForSpace,
   getSettings,
   getSpaceData,
+  pruneOrphanedStorageData,
   removeProjectEverywhere,
   reorderProjectsInStorage,
   setApiKey,
@@ -409,6 +411,71 @@ async function broadcastStateChanged(): Promise<void> {
   }
 }
 
+async function getAliveGoalIds(): Promise<Set<string> | undefined> {
+  try {
+    const client = await api();
+    const settings = await getSettings();
+    if (settings.activeSpaceId === "all") {
+      const spaces = await client.listSpaces();
+      const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
+      return new Set(lists.flat().map((g) => g.id));
+    } else if (settings.activeSpaceId) {
+      const goals = await client.listGoals(settings.activeSpaceId);
+      return new Set(goals.map((g) => g.id));
+    }
+  } catch {
+    // Offline, rate-limited, or no API key configured
+  }
+  return undefined;
+}
+
+async function generateCleanBackup(): Promise<BackupPayload> {
+  const settings = await getSettings();
+  const allProjects = await getAllProjects();
+
+  if (settings.activeSpaceId === "all") {
+    const allData = await getAllStoredSpaceData();
+    const mergedLinks: Record<string, TaskProjectLink> = {};
+    const mergedOverrides: Record<string, string> = {};
+    const mergedTexts: Record<string, TaskTextConfig> = {};
+    const allTemplates: GoalTemplate[] = [];
+
+    for (const d of allData.values()) {
+      Object.assign(mergedLinks, d.taskProjectLinks);
+      Object.assign(mergedOverrides, d.taskColorOverrides);
+      Object.assign(mergedTexts, d.taskTextConfigs);
+      if (d.templates) allTemplates.push(...d.templates);
+    }
+
+    return {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      spaceId: "all",
+      data: {
+        projects: allProjects,
+        taskProjectLinks: mergedLinks,
+        taskColorOverrides: mergedOverrides,
+        templates: allTemplates,
+        taskTextConfigs: mergedTexts,
+      },
+    };
+  }
+
+  const spaceId = await requireActiveSpaceId();
+  const spaceData = await getSpaceData(spaceId);
+  const projectsForSpace = await getProjectsForSpace(spaceId);
+
+  return {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    spaceId,
+    data: {
+      ...spaceData,
+      projects: projectsForSpace,
+    },
+  };
+}
+
 // ---------- message router ----------
 
 type Handler<T extends BgMessage = BgMessage> = (msg: T) => Promise<BgResponseMap[keyof BgResponseMap]>;
@@ -493,42 +560,19 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     return null;
   },
   EXPORT_BACKUP: async () => {
-    const settings = await getSettings();
-    if (settings.activeSpaceId === "all") {
-      const allProjects = await getAllProjects();
-      const allData = await getAllStoredSpaceData();
-      const mergedLinks: Record<string, TaskProjectLink> = {};
-      const mergedOverrides: Record<string, string> = {};
-      const mergedTexts: Record<string, TaskTextConfig> = {};
-      const allTemplates: GoalTemplate[] = [];
-
-      for (const d of allData.values()) {
-        Object.assign(mergedLinks, d.taskProjectLinks);
-        Object.assign(mergedOverrides, d.taskColorOverrides);
-        Object.assign(mergedTexts, d.taskTextConfigs);
-        if (d.templates) allTemplates.push(...d.templates);
-      }
-
-      return {
-        schemaVersion: 1,
-        exportedAt: new Date().toISOString(),
-        spaceId: "all",
-        data: {
-          projects: allProjects,
-          taskProjectLinks: mergedLinks,
-          taskColorOverrides: mergedOverrides,
-          templates: allTemplates,
-          taskTextConfigs: mergedTexts,
-        },
-      };
-    }
-    const spaceId = await requireActiveSpaceId();
-    const spaceData = await getSpaceData(spaceId);
+    const aliveGoalIds = await getAliveGoalIds();
+    await pruneOrphanedStorageData(aliveGoalIds);
+    return generateCleanBackup();
+  },
+  REFRESH_BACKUP: async () => {
+    const aliveGoalIds = await getAliveGoalIds();
+    const pruned = await pruneOrphanedStorageData(aliveGoalIds);
+    await broadcastStateChanged();
+    const backup = await generateCleanBackup();
     return {
-      schemaVersion: 1,
-      exportedAt: new Date().toISOString(),
-      spaceId,
-      data: spaceData,
+      backup,
+      prunedTotal: pruned.prunedLinks + pruned.prunedOverrides + pruned.prunedTexts,
+      prunedLinks: pruned.prunedLinks,
     };
   },
   IMPORT_BACKUP: async (msg) => {

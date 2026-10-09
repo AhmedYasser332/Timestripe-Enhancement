@@ -620,31 +620,6 @@ function injectDashboardStyles(): void {
       cursor: grabbing;
     }
 
-    .tse-reorder-btn {
-      background: transparent;
-      border: none;
-      color: #71717a;
-      cursor: pointer;
-      font-size: 9px;
-      padding: 2px 3px;
-      border-radius: 4px;
-      line-height: 1;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: color 0.1s ease, background 0.1s ease;
-      user-select: none;
-    }
-    .tse-reorder-btn:hover {
-      color: #ffffff;
-      background: rgba(255, 255, 255, 0.1);
-    }
-    .tse-reorder-btn:disabled {
-      opacity: 0.18;
-      cursor: default;
-      pointer-events: none;
-    }
-
     .tse-project-dot {
       width: 12px;
       height: 12px;
@@ -1841,24 +1816,20 @@ function updateProjectsList(
     dragHandle.textContent = "⋮⋮";
     dragHandle.title = "Drag to reorder";
 
-    // Drag-and-drop: initiate ONLY when grabbing the drag handle
-    dragHandle.addEventListener("pointerdown", () => {
-      row.draggable = true;
-    });
-    dragHandle.addEventListener("mousedown", () => {
-      row.draggable = true;
-    });
-
-    row.addEventListener("dragstart", (e) => {
+    // Drag-and-drop: native HTML5 drag on handle without flickering or full-row interference
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (e) => {
       draggedId = p.id;
       row.classList.add("tse-dragging");
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", p.id);
+        if (e.dataTransfer.setDragImage) {
+          e.dataTransfer.setDragImage(row, 20, 20);
+        }
       }
     });
-    row.addEventListener("dragend", () => {
-      row.draggable = false;
+    dragHandle.addEventListener("dragend", () => {
       draggedId = null;
       itemsContainer.querySelectorAll(".tse-project-row").forEach((r) => {
         r.classList.remove("tse-dragging", "tse-drag-over-top", "tse-drag-over-bottom");
@@ -1937,47 +1908,6 @@ function updateProjectsList(
     name.textContent = p.name;
     name.title = projectPath(projects, p.id).map((x) => x.name).join(" › ");
     name.setAttribute("dir", "auto");
-
-    // Reorder buttons (▲ / ▼) for precision single-click sibling reordering
-    const siblings = projects.filter((x) => (x.parentId ?? null) === (p.parentId ?? null));
-    const sIdx = siblings.findIndex((x) => x.id === p.id);
-
-    const reorderBox = document.createElement("div");
-    reorderBox.style.cssText = "display:inline-flex;flex-direction:column;gap:1px;margin-inline-end:2px;";
-
-    const upBtn = document.createElement("button");
-    upBtn.type = "button";
-    upBtn.className = "tse-reorder-btn";
-    upBtn.textContent = "▲";
-    upBtn.title = "Move up";
-    upBtn.disabled = sIdx <= 0;
-    bindActivate(upBtn, () => {
-      if (sIdx <= 0) return;
-      const prev = siblings[sIdx - 1];
-      const nextProjects = reorderProjectTree(projects, p.id, prev.id, "before");
-      void (async () => {
-        await sendToBg({ type: "REORDER_PROJECTS", projects: nextProjects });
-        await refresh();
-      })();
-    });
-
-    const downBtn = document.createElement("button");
-    downBtn.type = "button";
-    downBtn.className = "tse-reorder-btn";
-    downBtn.textContent = "▼";
-    downBtn.title = "Move down";
-    downBtn.disabled = sIdx >= siblings.length - 1;
-    bindActivate(downBtn, () => {
-      if (sIdx >= siblings.length - 1) return;
-      const nxt = siblings[sIdx + 1];
-      const nextProjects = reorderProjectTree(projects, p.id, nxt.id, "after");
-      void (async () => {
-        await sendToBg({ type: "REORDER_PROJECTS", projects: nextProjects });
-        await refresh();
-      })();
-    });
-
-    reorderBox.append(upBtn, downBtn);
 
     // Pencil = inline rename
     const renameBtn = document.createElement("button");
@@ -2089,7 +2019,7 @@ function updateProjectsList(
       openProjectDeleteDialog(p, projects, taskCounts.get(p.id) ?? 0, () => void refresh());
     };
 
-    row.append(dotBtn, name, reorderBox, renameBtn, moveBtn, select, countPill, deleteBtn);
+    row.append(dotBtn, name, renameBtn, moveBtn, select, countPill, deleteBtn);
     itemsContainer.appendChild(row);
   }
 
@@ -2459,6 +2389,32 @@ function renderSettingsPanel(
     })();
   });
 
+  const refreshJsonBtn = document.createElement("button");
+  refreshJsonBtn.type = "button";
+  refreshJsonBtn.className = "tse-btn-secondary";
+  refreshJsonBtn.textContent = "🔄 Refresh JSON";
+  refreshJsonBtn.title = "Sync with Timestripe API and prune deleted tasks/projects";
+  bindActivate(refreshJsonBtn, () => {
+    void (async () => {
+      refreshJsonBtn.disabled = true;
+      refreshJsonBtn.textContent = "🔄 Refreshing…";
+      const res = await sendToBg<{ backup: BackupPayload; prunedTotal: number; prunedLinks: number }>({
+        type: "REFRESH_BACKUP",
+      });
+      refreshJsonBtn.disabled = false;
+      refreshJsonBtn.textContent = "🔄 Refresh JSON";
+      if (!res?.ok || !res.data) {
+        showToast("Refresh failed");
+        return;
+      }
+      showToast(
+        res.data.prunedTotal > 0
+          ? `🔄 JSON refreshed! Pruned ${res.data.prunedTotal} deleted/orphaned items.`
+          : "🔄 JSON refreshed! All projects and tasks are 100% up to date.",
+      );
+    })();
+  });
+
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
   copyBtn.className = "tse-btn-secondary";
@@ -2478,7 +2434,7 @@ function renderSettingsPanel(
   pasteBtn.textContent = "📝 Paste JSON";
   bindActivate(pasteBtn, () => openInModalPasteBox(panel));
 
-  btnRow.append(downloadBtn, copyBtn, pasteBtn);
+  btnRow.append(refreshJsonBtn, copyBtn, downloadBtn, pasteBtn);
   backupCard.appendChild(btnRow);
   panel.appendChild(backupCard);
 }

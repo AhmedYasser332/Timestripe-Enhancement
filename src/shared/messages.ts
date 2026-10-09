@@ -64,6 +64,7 @@ export type SetTaskTextConfigMessage = {
   patch: Partial<TaskTextConfig> | null;
 };
 export type ExportBackupMessage = { type: "EXPORT_BACKUP" };
+export type RefreshBackupMessage = { type: "REFRESH_BACKUP" };
 export type ImportBackupMessage = {
   type: "IMPORT_BACKUP";
   payload: BackupPayload;
@@ -112,6 +113,7 @@ export type BgMessage =
   | ApplyTemplateMessage
   | SetTaskTextConfigMessage
   | ExportBackupMessage
+  | RefreshBackupMessage
   | ImportBackupMessage
   | ListSpacesMessage
   | SetActiveSpaceMessage
@@ -156,6 +158,7 @@ export type BgResponseMap = {
   APPLY_TEMPLATE: SmartDuplicateResult;
   SET_TASK_TEXT_CONFIG: null;
   EXPORT_BACKUP: BackupPayload;
+  REFRESH_BACKUP: { backup: BackupPayload; prunedTotal: number; prunedLinks: number };
   IMPORT_BACKUP: { restoredProjects: number; restoredTemplates: number };
   LIST_SPACES: TSSpace[];
   SET_ACTIVE_SPACE: null;

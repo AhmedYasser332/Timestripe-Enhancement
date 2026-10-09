@@ -15,7 +15,7 @@ import { initSelectionUI, reconcileCheckboxes } from "./selection-ui";
 import { initMarqueeSelection } from "./marquee";
 import { initGlobalHistoryShortcuts } from "./history";
 import { scanAndInjectEditorToolbar } from "./editor-toolbar";
-import { initDashboardShortcut, injectSidebarButton, refreshDashboardModalIfOpen } from "./dashboard-modal";
+import { initDashboardShortcut, injectSidebarButton } from "./dashboard-modal";
 
 function renderAll(): void {
   const viewState = getViewState();
@@ -39,7 +39,6 @@ function renderAll(): void {
   reconcileCheckboxes();
   scanAndInjectEditorToolbar();
   injectSidebarButton();
-  refreshDashboardModalIfOpen();
 }
 
 // Track goal click target for native "..." menu integration (PRD §55)

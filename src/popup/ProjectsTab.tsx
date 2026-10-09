@@ -175,25 +175,6 @@ export function ProjectsTab(): React.JSX.Element {
     await load();
   };
 
-  const moveUp = (p: Project) => {
-    const siblings = projects.filter((x) => (x.parentId ?? null) === (p.parentId ?? null));
-    const sIdx = siblings.findIndex((x) => x.id === p.id);
-    if (sIdx <= 0) return;
-    const prev = siblings[sIdx - 1];
-    const next = reorderProjectTree(projects, p.id, prev.id, "before");
-    void reorderProjects(next);
-  };
-
-  const moveDown = (p: Project) => {
-    const siblings = projects.filter((x) => (x.parentId ?? null) === (p.parentId ?? null));
-    const sIdx = siblings.findIndex((x) => x.id === p.id);
-    if (sIdx >= siblings.length - 1) return;
-    const nxt = siblings[sIdx + 1];
-    const next = reorderProjectTree(projects, p.id, nxt.id, "after");
-    void reorderProjects(next);
-  };
-
-  // Build tree order with ancestor continuation flags for rails
   const visibleEntries: Array<{ node: ProjectTreeNode; ancestorLast: boolean[] }> = [];
   const walkTree = (nodes: ProjectTreeNode[], ancestorLast: boolean[]): void => {
     nodes.forEach((n, idx) => {
@@ -238,9 +219,6 @@ export function ProjectsTab(): React.JSX.Element {
               const hasChildren = node.children.length > 0;
               const isCollapsed = collapsedIds.has(p.id);
               const totalTasks = subtreeTaskCount(projects, p.id, counts);
-
-              const siblings = projects.filter((x) => (x.parentId ?? null) === (p.parentId ?? null));
-              const sIdx = siblings.findIndex((x) => x.id === p.id);
 
               const isDragging = draggedId === p.id;
               const isOverTop = dragOverId?.id === p.id && dragOverId.isTop;
@@ -402,26 +380,6 @@ export function ProjectsTab(): React.JSX.Element {
                         {totalTasks} tasks
                       </span>
                       <div className="project-actions">
-                        <div style={{ display: "inline-flex", flexDirection: "column", gap: "1px", marginInlineEnd: "2px" }}>
-                          <button
-                            type="button"
-                            className="popup-reorder-btn"
-                            title="Move up"
-                            disabled={sIdx <= 0}
-                            onClick={() => moveUp(p)}
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            className="popup-reorder-btn"
-                            title="Move down"
-                            disabled={sIdx >= siblings.length - 1}
-                            onClick={() => moveDown(p)}
-                          >
-                            ▼
-                          </button>
-                        </div>
                         <ColorPicker
                           value={p.color || effectiveColor(projects, p.id)}
                           onChange={(c) => void recolor(p.id, c)}

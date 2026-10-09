@@ -152,6 +152,23 @@ export function SettingsTab({ settings, onSettingsChanged }: Props): React.JSX.E
     }
   }, []);
 
+  const refreshJsonBackup = useCallback(async () => {
+    setBackupStatus("🔄 Refreshing JSON and syncing with Timestripe…");
+    const res = await callBg<{ backup: BackupPayload; prunedTotal: number; prunedLinks: number }>({
+      type: "REFRESH_BACKUP",
+    });
+    if (!res) {
+      setBackupStatus("Error: Could not refresh backup data.");
+      return;
+    }
+    setBackupStatus(
+      res.prunedTotal > 0
+        ? `🔄 JSON refreshed! Pruned ${res.prunedTotal} deleted/orphaned items.`
+        : "🔄 JSON refreshed! All projects and tasks are 100% up to date.",
+    );
+    onSettingsChanged();
+  }, [onSettingsChanged]);
+
   const executePasteImport = useCallback(async () => {
     if (!pastedJson.trim()) return;
     try {
@@ -325,11 +342,14 @@ export function SettingsTab({ settings, onSettingsChanged }: Props): React.JSX.E
         </p>
 
         <div className="btn-row" style={{ flexWrap: "wrap", gap: "8px" }}>
-          <button type="button" className="btn btn-secondary" onClick={() => void exportBackup()}>
-            Download .json
+          <button type="button" className="btn btn-secondary" onClick={() => void refreshJsonBackup()}>
+            🔄 Refresh JSON
           </button>
           <button type="button" className="btn btn-secondary" onClick={() => void copyJsonBackup()}>
             📋 Copy JSON
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => void exportBackup()}>
+            Download .json
           </button>
           <label className="btn btn-secondary" style={{ cursor: "pointer" }}>
             Upload File
