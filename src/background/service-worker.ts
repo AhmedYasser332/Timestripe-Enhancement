@@ -572,16 +572,12 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       return { parentIdsToCheck: [], parentIdsToUncheck: [] };
     }
 
-    const spaceId = settings.activeSpaceId ?? (await requireActiveSpaceId());
     let goals: TSGoal[] = [];
     try {
-      if (spaceId === "all") {
-        const spaces = await client.listSpaces();
-        const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
-        goals = lists.flat();
-      } else {
-        goals = await client.listGoals(spaceId);
-      }
+      // Fetch across spaces so cross-horizon goals (Day -> Week -> Month) are always resolved
+      const spaces = await client.listSpaces();
+      const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
+      goals = lists.flat();
     } catch {
       return { parentIdsToCheck: [], parentIdsToUncheck: [] };
     }
@@ -601,14 +597,18 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       return { parentIdsToCheck: [], parentIdsToUncheck: [] };
     }
 
-    // Reflect the current user action in memory immediately
+    // Reflect the user's immediate action on the clicked goal
     target.checked = msg.checked;
 
     const parentIdsToCheck: string[] = [];
     const parentIdsToUncheck: string[] = [];
 
     if (msg.checked) {
-      // Subgoal was checked: walk UP ancestors. If all subgoals of ancestor are checked, check ancestor!
+      // =======================================================================
+      // CHECK: Walk UP ancestors.
+      // If and only if 100% of the subgoals of an ancestor are checked, check it!
+      // If ANY subgoal is unchecked (e.g. 1 of 4), STOP immediately!
+      // =======================================================================
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
         const parent = byId.get(currParentId);
@@ -617,7 +617,8 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         const subgoals = childrenByParent.get(currParentId) ?? [];
         if (subgoals.length === 0) break;
 
-        const allDone = subgoals.every((s) => s.checked);
+        // Check if every single subgoal under this parent is checked
+        const allDone = subgoals.every((s) => (s.id === msg.goalId ? true : s.checked));
         if (allDone) {
           if (!parent.checked) {
             try {
@@ -628,28 +629,32 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
               console.warn("[TSE] auto-complete parent failed", parent.id, err);
             }
           }
-          // Move up to check the grandparent!
+          // Move up to inspect the grandparent!
           currParentId = parent.parent_id;
         } else {
+          // At least one sibling is unchecked: this parent cannot be complete!
           break;
         }
       }
     } else {
-      // Subgoal was UNchecked: any checked ancestor that has this subgoal can no longer be complete!
+      // =======================================================================
+      // UNCHECK: Walk UP ancestors.
+      // Since this subgoal is now unchecked, NO ancestor above it can be complete!
+      // Ensure all ancestors are marked unchecked!
+      // =======================================================================
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
         const parent = byId.get(currParentId);
         if (!parent) break;
 
-        if (parent.checked) {
-          try {
-            await client.updateGoal(parent.id, { checked: false });
-            parent.checked = false;
-            parentIdsToUncheck.push(parent.id);
-          } catch (err) {
-            console.warn("[TSE] auto-uncheck parent failed", parent.id, err);
-          }
+        try {
+          await client.updateGoal(parent.id, { checked: false });
+        } catch (err) {
+          console.warn("[TSE] auto-uncheck parent failed", parent.id, err);
         }
+        parent.checked = false;
+        parentIdsToUncheck.push(parent.id);
+
         currParentId = parent.parent_id;
       }
     }

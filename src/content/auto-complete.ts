@@ -1,11 +1,10 @@
 /**
  * Auto-complete parent goals when all subgoals are completed.
  * Features:
- * - 0ms instant DOM reactivity: checks if all visible sibling subgoals of a parent are checked,
- *   and programmatically checks the parent goal immediately.
- * - Deep multi-level cascade (Day -> Week -> Month) synced with Timestripe API via service worker.
- * - Auto-uncheck: if a subgoal is unchecked, automatically unchecks the parent goal.
- * - Controlled by setting `autoCompleteParent` (default true).
+ * - Deterministic intent capture: determines check vs uncheck at the instant of click in the capturing phase.
+ * - Auto-uncheck: unchecking any subgoal immediately unchecks the parent goal. An uncheck action NEVER checks any parent!
+ * - Multi-level cascade (Day -> Week -> Month): only auto-completes an ancestor when 100% of its subgoals are truly complete.
+ * - Prevents premature completion: never assumes visible DOM rows equal total subgoals.
  */
 
 import {
@@ -26,102 +25,134 @@ function triggerNativeCheckboxClick(cb: HTMLElement): void {
   try {
     cb.click();
   } catch {
-    cb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    cb.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, view: window }),
+    );
   }
   setTimeout(() => {
     isProgrammaticClick = false;
-  }, 350);
+  }, 400);
 }
 
-/** Check DOM siblings and auto-complete parent immediately in the page. */
-function checkDomAncestors(goalId: string, isChecked: boolean): void {
-  const rows = scanGoalRows();
-  const childHandle = rows.get(goalId);
-  const parentId = childHandle?.domParentId || getGoalParents()[goalId];
-  if (!parentId) return;
-
-  const parentHandle = rows.get(parentId);
-  if (!parentHandle) return;
-
-  const parentCb = getNativeGoalCheckbox(parentHandle.wrapper);
-  if (!parentCb) return;
-
-  const parentChecked = isGoalChecked(parentHandle.wrapper);
-
-  if (isChecked) {
-    // Child was checked: find all visible siblings belonging to this parent
-    const siblings = Array.from(rows.values()).filter(
-      (h) => (h.domParentId || getGoalParents()[h.goalId]) === parentId,
-    );
-
-    const allSiblingsChecked =
-      siblings.length > 0 && siblings.every((h) => isGoalChecked(h.wrapper));
-
-    if (allSiblingsChecked && !parentChecked) {
-      triggerNativeCheckboxClick(parentCb);
-      showToast("✓ All subgoals complete — parent goal completed!");
-    }
-  } else {
-    // Child was unchecked: if parent was checked, uncheck it!
-    if (parentChecked) {
-      triggerNativeCheckboxClick(parentCb);
-    }
+/** Parse explicit subgoal count from parent text in DOM (e.g. "1 subgoal", "4 subgoals"). */
+function parseSubgoalCountFromDom(parentWrapper: HTMLElement): number | null {
+  const text = parentWrapper.textContent ?? "";
+  const m = text.match(/(\d+)\s*subgoal/i);
+  if (m) {
+    const count = parseInt(m[1], 10);
+    if (!isNaN(count)) return count;
   }
+  return null;
 }
 
-/** Handler called whenever a native goal checkbox is clicked. */
-function handleCheckboxClick(goalId: string, wrapper: HTMLElement): void {
-  if (isProgrammaticClick) return;
-
+/**
+ * Handle a user's click on a native goal checkbox.
+ * `willBeChecked` is captured synchronously at the moment of click:
+ * - true: the user is checking an unchecked goal.
+ * - false: the user is unchecking an already-checked goal.
+ */
+function handleCheckboxAction(
+  goalId: string,
+  _wrapper: HTMLElement,
+  willBeChecked: boolean,
+): void {
   const settings = getSettings();
   if (settings.autoCompleteParent === false) return;
 
-  // Wait 60ms for Timestripe's own React state to update the clicked checkbox in DOM
-  setTimeout(() => {
-    const isChecked = isGoalChecked(wrapper);
+  if (!willBeChecked) {
+    // =========================================================================
+    // UNCHECK ACTION:
+    // When any subgoal is unchecked, the parent goal is NO LONGER fully complete!
+    // Uncheck the parent goal in the DOM immediately (0ms visual reactivity).
+    // An uncheck action CAN NEVER check any ancestor!
+    // =========================================================================
+    const rows = scanGoalRows();
+    const childHandle = rows.get(goalId);
+    const parentId = childHandle?.domParentId || getGoalParents()[goalId];
 
-    // 1. Instant DOM check (0ms visual feedback)
-    checkDomAncestors(goalId, isChecked);
-
-    // 2. Authoritative background sync across all Horizons & columns (Day -> Week -> Month)
-    void (async () => {
-      const res = await sendToBg<AutoCompleteParentResult>({
-        type: "AUTO_COMPLETE_PARENT",
-        goalId,
-        checked: isChecked,
-      });
-
-      if (!res?.ok || !res.data) return;
-
-      const { parentIdsToCheck, parentIdsToUncheck } = res.data;
-
-      // Ensure any ancestors marked checked by server are also checked in the DOM
-      if (parentIdsToCheck && parentIdsToCheck.length > 0) {
-        for (const pId of parentIdsToCheck) {
-          const pWrapper = document.querySelector<HTMLElement>(
-            `.GoalRowWrapper[data-draggable-id*='::goal:${pId}']`,
-          );
-          if (pWrapper && !isGoalChecked(pWrapper)) {
-            const cb = getNativeGoalCheckbox(pWrapper);
-            if (cb) triggerNativeCheckboxClick(cb);
-          }
+    if (parentId) {
+      const parentHandle = rows.get(parentId);
+      if (parentHandle && isGoalChecked(parentHandle.wrapper)) {
+        const parentCb = getNativeGoalCheckbox(parentHandle.wrapper);
+        if (parentCb) {
+          triggerNativeCheckboxClick(parentCb);
         }
       }
+    }
 
-      // Ensure any ancestors marked unchecked by server are unchecked in DOM
+    // Authoritative background uncheck on Timestripe API (recursively handles grandparents)
+    void sendToBg<AutoCompleteParentResult>({
+      type: "AUTO_COMPLETE_PARENT",
+      goalId,
+      checked: false,
+    }).then((res) => {
+      if (!res?.ok || !res.data) return;
+      const { parentIdsToUncheck } = res.data;
       if (parentIdsToUncheck && parentIdsToUncheck.length > 0) {
         for (const pId of parentIdsToUncheck) {
           const pWrapper = document.querySelector<HTMLElement>(
             `.GoalRowWrapper[data-draggable-id*='::goal:${pId}']`,
           );
           if (pWrapper && isGoalChecked(pWrapper)) {
-            const cb = getNativeGoalCheckbox(pWrapper);
-            if (cb) triggerNativeCheckboxClick(cb);
+            const pCb = getNativeGoalCheckbox(pWrapper);
+            if (pCb) triggerNativeCheckboxClick(pCb);
           }
         }
       }
-    })();
-  }, 60);
+    });
+  } else {
+    // =========================================================================
+    // CHECK ACTION:
+    // A subgoal is being checked.
+    // Can we check the parent in the DOM immediately?
+    // ONLY if the parent explicitly has 1 single subgoal ("1 subgoal" in DOM)!
+    // If it has multiple subgoals (e.g. "4 subgoals"), we MUST NOT check it from DOM!
+    // We let the background service worker verify with Timestripe API that ALL
+    // subgoals are truly complete before marking the parent done.
+    // =========================================================================
+    const rows = scanGoalRows();
+    const childHandle = rows.get(goalId);
+    const parentId = childHandle?.domParentId || getGoalParents()[goalId];
+
+    if (parentId) {
+      const parentHandle = rows.get(parentId);
+      if (parentHandle && !isGoalChecked(parentHandle.wrapper)) {
+        const subCount = parseSubgoalCountFromDom(parentHandle.wrapper);
+        // Instant check only if parent has exactly 1 subgoal (which was just checked)
+        if (subCount === 1) {
+          const parentCb = getNativeGoalCheckbox(parentHandle.wrapper);
+          if (parentCb) {
+            triggerNativeCheckboxClick(parentCb);
+            showToast("✓ Subgoal complete — parent goal completed!");
+          }
+        }
+      }
+    }
+
+    // Authoritative background check on Timestripe API
+    void sendToBg<AutoCompleteParentResult>({
+      type: "AUTO_COMPLETE_PARENT",
+      goalId,
+      checked: true,
+    }).then((res) => {
+      if (!res?.ok || !res.data) return;
+      const { parentIdsToCheck } = res.data;
+      if (parentIdsToCheck && parentIdsToCheck.length > 0) {
+        for (const pId of parentIdsToCheck) {
+          const pWrapper = document.querySelector<HTMLElement>(
+            `.GoalRowWrapper[data-draggable-id*='::goal:${pId}']`,
+          );
+          if (pWrapper && !isGoalChecked(pWrapper)) {
+            const pCb = getNativeGoalCheckbox(pWrapper);
+            if (pCb) {
+              triggerNativeCheckboxClick(pCb);
+              showToast("✓ All subgoals complete — parent goal completed!");
+            }
+          }
+        }
+      }
+    });
+  }
 }
 
 /** Initialize document-level click listener for native checkboxes. */
@@ -155,8 +186,14 @@ export function initAutoComplete(): void {
       const goalId = goalIdFromWrapper(wrapper);
       if (!goalId) return;
 
-      handleCheckboxClick(goalId, wrapper);
+      // Capture the exact state in capturing phase before the click alters anything:
+      // If it was checked -> user is UNCHECKING (willBeChecked = false).
+      // If it was unchecked -> user is CHECKING (willBeChecked = true).
+      const wasChecked = isGoalChecked(wrapper);
+      const willBeChecked = !wasChecked;
+
+      handleCheckboxAction(goalId, wrapper, willBeChecked);
     },
-    true, // Capturing phase
+    true, // Capturing phase: guarantees state is inspected BEFORE React handles click
   );
 }
