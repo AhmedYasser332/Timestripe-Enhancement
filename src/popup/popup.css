@@ -324,14 +324,72 @@ input[type="password"]:focus {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
+  min-height: 38px;
+  box-sizing: border-box;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 6px;
   position: relative;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .project-item-card:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+.project-item-card.dragging {
+  opacity: 0.35;
+  background: rgba(255, 255, 255, 0.03);
+}
+.project-item-card.drag-over-top {
+  border-top: 2px solid #00a8ff !important;
+}
+.project-item-card.drag-over-bottom {
+  border-bottom: 2px solid #00a8ff !important;
+}
+
+.popup-drag-handle {
+  cursor: grab;
+  color: #555558;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 18px;
+  user-select: none;
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: opacity 0.12s ease, color 0.12s ease;
+  font-size: 12px;
+  line-height: 1;
+}
+.project-item-card:hover .popup-drag-handle {
+  opacity: 1;
+  color: #a1a1aa;
+}
+.popup-drag-handle:hover {
+  color: #ffffff !important;
+}
+.popup-reorder-btn {
+  background: transparent;
+  border: none;
+  color: #71717a;
+  cursor: pointer;
+  font-size: 8.5px;
+  padding: 1px 2px;
+  border-radius: 3px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+.popup-reorder-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.popup-reorder-btn:disabled {
+  opacity: 0.18;
+  cursor: default;
+  pointer-events: none;
 }
 
 .popup-tree-guide {
@@ -385,9 +443,14 @@ input[type="password"]:focus {
   font-size: 13px;
   font-weight: 500;
   color: #f4f4f5;
+  line-height: 1.5;
+  padding-top: 2px;
+  padding-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-sizing: border-box;
+  display: inline-block;
 }
 
 .project-actions {

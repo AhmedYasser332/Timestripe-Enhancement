@@ -23,6 +23,7 @@ import {
   getSettings,
   getSpaceData,
   removeProjectEverywhere,
+  reorderProjectsInStorage,
   setApiKey,
   setSettings,
   setTaskColorOverrides,
@@ -607,6 +608,12 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     }
     await broadcastStateChanged();
     return msg.project;
+  },
+  REORDER_PROJECTS: async (msg) => {
+    await reorderProjectsInStorage(msg.projectIds);
+    await broadcastStateChanged();
+    const settings = await getSettings();
+    return getProjectsForSpace(settings.activeSpaceId);
   },
   DELETE_PROJECT: async (msg) => {
     const all = await getAllProjects();

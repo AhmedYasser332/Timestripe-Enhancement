@@ -83,6 +83,7 @@ export type CreateProjectMessage = {
   parentId?: string | null;
 };
 export type UpdateProjectMessage = { type: "UPDATE_PROJECT"; project: Project };
+export type ReorderProjectsMessage = { type: "REORDER_PROJECTS"; projectIds: string[] };
 /** mode: "cascade" removes the project AND every descendant; "promote" removes only the project and lifts its children one level up. */
 export type DeleteProjectMessage = { type: "DELETE_PROJECT"; projectId: string; mode?: "cascade" | "promote" };
 export type GetSettingsMessage = { type: "GET_SETTINGS" };
@@ -117,6 +118,7 @@ export type BgMessage =
   | GetProjectsMessage
   | CreateProjectMessage
   | UpdateProjectMessage
+  | ReorderProjectsMessage
   | DeleteProjectMessage
   | GetSettingsMessage
   | SetSettingsMessage
@@ -160,6 +162,7 @@ export type BgResponseMap = {
   GET_PROJECTS: Project[];
   CREATE_PROJECT: Project;
   UPDATE_PROJECT: Project;
+  REORDER_PROJECTS: Project[];
   DELETE_PROJECT: null;
   GET_SETTINGS: Settings;
   SET_SETTINGS: Settings;

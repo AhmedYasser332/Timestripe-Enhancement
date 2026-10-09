@@ -49,6 +49,9 @@ let newProjectParentId: string | null = null;
 // Collapsed parents in the dashboard projects tree
 const collapsedProjectIds = new Set<string>();
 
+// Single source of truth for the dashboard modal
+let currentDashboardProjects: Project[] = [];
+
 // Pre-fetch spaces and templates on script load so cachedSpaces is ready immediately
 void sendToBg<TSSpace[]>({ type: "LIST_SPACES" }).then((res) => {
   if (res?.ok && res.data) cachedSpaces = res.data;
@@ -565,17 +568,80 @@ function injectDashboardStyles(): void {
     .tse-project-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       padding: 6px 10px;
+      min-height: 38px;
       background: transparent;
-      border: none;
+      border: 1px solid transparent;
       border-radius: 6px;
       margin: 1px 0;
       position: relative;
-      transition: background 0.12s ease;
+      transition: background 0.12s ease, border-color 0.12s ease;
+      box-sizing: border-box;
     }
     .tse-project-row:hover {
       background: rgba(255, 255, 255, 0.06);
+    }
+    .tse-project-row.tse-dragging {
+      opacity: 0.35;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .tse-project-row.tse-drag-over-top {
+      border-top: 2px solid #00A8FF !important;
+    }
+    .tse-project-row.tse-drag-over-bottom {
+      border-bottom: 2px solid #00A8FF !important;
+    }
+
+    .tse-drag-handle {
+      cursor: grab;
+      color: #555558;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 20px;
+      user-select: none;
+      flex-shrink: 0;
+      opacity: 0.45;
+      transition: opacity 0.12s ease, color 0.12s ease;
+      font-size: 13px;
+      line-height: 1;
+    }
+    .tse-project-row:hover .tse-drag-handle {
+      opacity: 1;
+      color: #a1a1aa;
+    }
+    .tse-drag-handle:hover {
+      color: #ffffff !important;
+    }
+    .tse-drag-handle:active {
+      cursor: grabbing;
+    }
+
+    .tse-reorder-btn {
+      background: transparent;
+      border: none;
+      color: #71717a;
+      cursor: pointer;
+      font-size: 9px;
+      padding: 2px 3px;
+      border-radius: 4px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.1s ease, background 0.1s ease;
+      user-select: none;
+    }
+    .tse-reorder-btn:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .tse-reorder-btn:disabled {
+      opacity: 0.18;
+      cursor: default;
+      pointer-events: none;
     }
 
     .tse-project-dot {
@@ -591,9 +657,14 @@ function injectDashboardStyles(): void {
       font-size: 13.5px;
       font-weight: 500;
       color: #ffffff;
+      line-height: 1.5;
+      padding-top: 2px;
+      padding-bottom: 4px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      box-sizing: border-box;
+      display: inline-block;
     }
 
     .tse-project-pill {
@@ -677,6 +748,25 @@ function injectDashboardStyles(): void {
     .tse-swatch.selected {
       border-color: #ffffff;
       box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+    }
+    .tse-swatch-more {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      line-height: 1;
+      background: #27272a;
+      border: 1.5px dashed rgba(255, 255, 255, 0.3);
+      color: #e4e4e7;
+    }
+    .tse-swatch-more:hover {
+      border-color: #ffffff;
+      background: #323236;
+      transform: scale(1.15);
+    }
+    .tse-swatch-more.selected {
+      border: 2px solid #ffffff;
+      box-shadow: 0 0 8px rgba(255, 255, 255, 0.35);
     }
 
     /* Appearance Cards */
@@ -1369,6 +1459,32 @@ async function syncBackgroundData(
   renderTemplatesPanel(panelTemplates, cachedTemplates);
 }
 
+function populateParentSelect(sel: HTMLSelectElement, list: Project[]): void {
+  const prev = newProjectParentId;
+  sel.innerHTML =
+    `<option value="">No parent (top level)</option>` +
+    flattenTree(buildProjectTree(list))
+      .map(
+        (n) =>
+          `<option value="${n.project.id}" ${n.project.id === prev ? "selected" : ""}>${" ".repeat(n.depth * 2)}${
+            n.depth > 0 ? "↳ " : ""
+          }${n.project.name}</option>`,
+      )
+      .join("");
+  if (prev && !Array.from(sel.options).some((o) => o.value === prev)) {
+    newProjectParentId = null; // parent vanished (deleted) — reset the form
+  }
+}
+
+/** Keep the New-Project parent select in sync with the current project list. */
+function syncNewProjectParentSelect(projects?: Project[]): void {
+  if (projects) currentDashboardProjects = projects;
+  const list = currentDashboardProjects.length > 0 ? currentDashboardProjects : getProjects();
+  const sel = document.getElementById("tse-new-project-parent") as HTMLSelectElement | null;
+  if (!sel) return;
+  populateParentSelect(sel, list);
+}
+
 function renderProjectsPanel(
   panel: HTMLElement,
   projects: Project[],
@@ -1419,12 +1535,11 @@ function renderProjectsPanel(
   parentSelect.id = "tse-new-project-parent";
   parentSelect.className = "tse-scope-select";
   parentSelect.style.flex = "1";
-  const syncParentOptions = (): void => syncNewProjectParentSelect(projects);
-  syncParentOptions();
+  populateParentSelect(parentSelect, currentDashboardProjects.length > 0 ? currentDashboardProjects : projects);
+
   parentSelect.onchange = () => {
     newProjectParentId = parentSelect.value || null;
-    // Read the LIVE project list (state cache) — the render-time snapshot goes stale
-    const parent = getProjects().find((x) => x.id === newProjectParentId);
+    const parent = (currentDashboardProjects.length > 0 ? currentDashboardProjects : getProjects()).find((x) => x.id === newProjectParentId);
     // A sub inherits the parent's scope — lock the scope chips
     const chips = scopeRow.querySelectorAll<HTMLButtonElement>(".tse-chip[data-scope]");
     if (parent) {
@@ -1479,15 +1594,45 @@ function renderProjectsPanel(
     const s = document.createElement("button");
     s.type = "button";
     s.className = c === newProjectColor ? "tse-swatch selected" : "tse-swatch";
+    s.dataset.color = c.toUpperCase();
     s.style.background = c;
     bindActivate(s, () => {
       newProjectColor = c;
       newProjectColorTouched = true;
       swatchRow.querySelectorAll(".tse-swatch").forEach((el) => el.classList.remove("selected"));
       s.classList.add("selected");
+      moreColorsBtn.style.background = "#27272a";
     });
     swatchRow.appendChild(s);
   }
+
+  // Full color palette & eyedropper button (matches the rich 59-color palette)
+  const moreColorsBtn = document.createElement("button");
+  moreColorsBtn.type = "button";
+  moreColorsBtn.className = "tse-swatch tse-swatch-more";
+  moreColorsBtn.title = "Full Palette & Custom Color (59 colors + EyeDropper)";
+  moreColorsBtn.innerHTML = `🎨`;
+  if (!QUICK_COLORS.includes(newProjectColor) && newProjectColor) {
+    moreColorsBtn.style.background = newProjectColor;
+    moreColorsBtn.classList.add("selected");
+  }
+  bindActivate(moreColorsBtn, () => {
+    openColorPopover(moreColorsBtn, newProjectColor, (color) => {
+      if (!color) return;
+      newProjectColor = color;
+      newProjectColorTouched = true;
+      swatchRow.querySelectorAll(".tse-swatch").forEach((el) => el.classList.remove("selected"));
+      const matchingQuick = swatchRow.querySelector<HTMLButtonElement>(`.tse-swatch[data-color='${color.toUpperCase()}']`);
+      if (matchingQuick) {
+        matchingQuick.classList.add("selected");
+        moreColorsBtn.style.background = "#27272a";
+      } else {
+        moreColorsBtn.style.background = color;
+        moreColorsBtn.classList.add("selected");
+      }
+    });
+  });
+  swatchRow.appendChild(moreColorsBtn);
 
   // Right-aligned sleek primary button (matching Timestripe)
   const btnRow = document.createElement("div");
@@ -1523,8 +1668,9 @@ function renderProjectsPanel(
       newProjectColorTouched = false;
       const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
       if (updated?.ok && updated.data) {
+        currentDashboardProjects = updated.data;
         updateProjectsList(listCard, updated.data, spaces, viewState);
-        syncParentOptions();
+        syncNewProjectParentSelect(updated.data);
       }
     })();
   });
@@ -1579,32 +1725,13 @@ function setScopeSelection(scopeRow: HTMLElement, targetScope: string): void {
   });
 }
 
-/** Keep the New-Project parent select in sync with the current project list. */
-function syncNewProjectParentSelect(projects: Project[]): void {
-  const sel = document.getElementById("tse-new-project-parent") as HTMLSelectElement | null;
-  if (!sel) return;
-  const prev = newProjectParentId;
-  sel.innerHTML =
-    `<option value="">No parent (top level)</option>` +
-    flattenTree(buildProjectTree(projects))
-      .map(
-        (n) =>
-          `<option value="${n.project.id}" ${n.project.id === prev ? "selected" : ""}>${" ".repeat(n.depth * 2)}${
-            n.depth > 0 ? "↳ " : ""
-          }${n.project.name}</option>`,
-      )
-      .join("");
-  if (prev && !Array.from(sel.options).some((o) => o.value === prev)) {
-    newProjectParentId = null; // parent vanished (deleted) — reset the form
-  }
-}
-
 function updateProjectsList(
   listCard: HTMLElement,
   projects: Project[],
   spaces: TSSpace[],
   viewState: ViewState,
 ): void {
+  currentDashboardProjects = projects;
   listCard.innerHTML = "";
   syncNewProjectParentSelect(projects);
 
@@ -1639,7 +1766,9 @@ function updateProjectsList(
   const refresh = async (): Promise<void> => {
     const updated = await sendToBg<Project[]>({ type: "GET_PROJECTS" });
     if (updated?.ok && updated.data) {
+      currentDashboardProjects = updated.data;
       updateProjectsList(listCard, updated.data, spaces, viewState);
+      syncNewProjectParentSelect(updated.data);
     }
   };
 
@@ -1666,6 +1795,8 @@ function updateProjectsList(
     });
   };
   walk(buildProjectTree(projects), []);
+
+  let draggedId: string | null = null;
 
   for (const { node, isLastSibling, continuingAncestors } of visibleEntries) {
     const p = node.project;
@@ -1703,6 +1834,61 @@ function updateProjectsList(
       }
     }
 
+    // Drag-and-drop support
+    row.draggable = true;
+    row.addEventListener("dragstart", (e) => {
+      draggedId = p.id;
+      row.classList.add("tse-dragging");
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", p.id);
+      }
+    });
+    row.addEventListener("dragend", () => {
+      draggedId = null;
+      itemsContainer.querySelectorAll(".tse-project-row").forEach((r) => {
+        r.classList.remove("tse-dragging", "tse-drag-over-top", "tse-drag-over-bottom");
+      });
+    });
+    row.addEventListener("dragover", (e) => {
+      if (!draggedId || draggedId === p.id) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      const rect = row.getBoundingClientRect();
+      const isTop = e.clientY < rect.top + rect.height / 2;
+      row.classList.toggle("tse-drag-over-top", isTop);
+      row.classList.toggle("tse-drag-over-bottom", !isTop);
+    });
+    row.addEventListener("dragleave", () => {
+      row.classList.remove("tse-drag-over-top", "tse-drag-over-bottom");
+    });
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      row.classList.remove("tse-drag-over-top", "tse-drag-over-bottom");
+      if (!draggedId || draggedId === p.id) return;
+      const rect = row.getBoundingClientRect();
+      const isTop = e.clientY < rect.top + rect.height / 2;
+
+      const sourceIdx = projects.findIndex((x) => x.id === draggedId);
+      if (sourceIdx < 0) return;
+      const [moved] = projects.splice(sourceIdx, 1);
+      const targetIdx = projects.findIndex((x) => x.id === p.id);
+      const insertIdx = isTop ? targetIdx : targetIdx + 1;
+      projects.splice(insertIdx, 0, moved);
+
+      const projectIds = projects.map((x) => x.id);
+      void (async () => {
+        await sendToBg({ type: "REORDER_PROJECTS", projectIds });
+        await refresh();
+      })();
+    });
+
+    // Drag handle
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "tse-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "Drag to reorder";
+
     // Expand/collapse toggle for parents (or a spacer to keep rows aligned)
     if (node.children.length > 0) {
       const expander = document.createElement("button");
@@ -1715,11 +1901,11 @@ function updateProjectsList(
         else collapsedProjectIds.add(p.id);
         void updateProjectsList(listCard, projects, spaces, viewState);
       });
-      row.appendChild(expander);
+      row.append(dragHandle, expander);
     } else {
       const spacer = document.createElement("span");
       spacer.className = "tse-tree-expander-spacer";
-      row.appendChild(spacer);
+      row.append(dragHandle, spacer);
     }
 
     // Color dot = edit-color button (opens rich palette)
@@ -1747,6 +1933,55 @@ function updateProjectsList(
     name.textContent = p.name;
     name.title = projectPath(projects, p.id).map((x) => x.name).join(" › ");
     name.setAttribute("dir", "auto");
+
+    // Reorder buttons (▲ / ▼) for precision single-click sibling reordering
+    const siblings = projects.filter((x) => (x.parentId ?? null) === (p.parentId ?? null));
+    const sIdx = siblings.findIndex((x) => x.id === p.id);
+
+    const reorderBox = document.createElement("div");
+    reorderBox.style.cssText = "display:inline-flex;flex-direction:column;gap:1px;margin-inline-end:2px;";
+
+    const upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.className = "tse-reorder-btn";
+    upBtn.textContent = "▲";
+    upBtn.title = "Move up";
+    upBtn.disabled = sIdx <= 0;
+    bindActivate(upBtn, () => {
+      if (sIdx <= 0) return;
+      const prev = siblings[sIdx - 1];
+      const idxA = projects.findIndex((x) => x.id === p.id);
+      const idxB = projects.findIndex((x) => x.id === prev.id);
+      const next = [...projects];
+      next[idxA] = prev;
+      next[idxB] = p;
+      void (async () => {
+        await sendToBg({ type: "REORDER_PROJECTS", projectIds: next.map((x) => x.id) });
+        await refresh();
+      })();
+    });
+
+    const downBtn = document.createElement("button");
+    downBtn.type = "button";
+    downBtn.className = "tse-reorder-btn";
+    downBtn.textContent = "▼";
+    downBtn.title = "Move down";
+    downBtn.disabled = sIdx >= siblings.length - 1;
+    bindActivate(downBtn, () => {
+      if (sIdx >= siblings.length - 1) return;
+      const nxt = siblings[sIdx + 1];
+      const idxA = projects.findIndex((x) => x.id === p.id);
+      const idxB = projects.findIndex((x) => x.id === nxt.id);
+      const next = [...projects];
+      next[idxA] = nxt;
+      next[idxB] = p;
+      void (async () => {
+        await sendToBg({ type: "REORDER_PROJECTS", projectIds: next.map((x) => x.id) });
+        await refresh();
+      })();
+    });
+
+    reorderBox.append(upBtn, downBtn);
 
     // Pencil = inline rename
     const renameBtn = document.createElement("button");
@@ -1858,7 +2093,7 @@ function updateProjectsList(
       openProjectDeleteDialog(p, projects, taskCounts.get(p.id) ?? 0, () => void refresh());
     };
 
-    row.append(dotBtn, name, renameBtn, moveBtn, select, countPill, deleteBtn);
+    row.append(dotBtn, name, reorderBox, renameBtn, moveBtn, select, countPill, deleteBtn);
     itemsContainer.appendChild(row);
   }
 
@@ -2372,4 +2607,26 @@ function renderTemplatesPanel(panel: HTMLElement, templates: GoalTemplate[]): vo
   }
 
   panel.appendChild(tplCard);
+}
+
+/**
+ * Automatically refreshes the open KK dashboard modal (both projects list and
+ * parent options) whenever background state changes (e.g. from popup, storage sync, or external mutations).
+ */
+export function refreshDashboardModalIfOpen(): void {
+  if (!activeModalEl) return;
+  void (async () => {
+    const [spacesRes, projectsRes, viewRes] = await Promise.all([
+      sendToBg<TSSpace[]>({ type: "LIST_SPACES" }),
+      sendToBg<Project[]>({ type: "GET_PROJECTS" }),
+      sendToBg<ViewState>({ type: "GET_VIEW_STATE" }),
+    ]);
+    if (spacesRes?.ok && spacesRes.data) cachedSpaces = spacesRes.data;
+    const projs = projectsRes?.ok && projectsRes.data ? projectsRes.data : getProjects();
+    const vs = viewRes?.ok && viewRes.data ? viewRes.data : getViewState();
+    const pProj = activeModalEl?.querySelector<HTMLElement>("#tse-panel-projects");
+    if (pProj) {
+      renderProjectsPanel(pProj, projs, cachedSpaces, vs);
+    }
+  })();
 }

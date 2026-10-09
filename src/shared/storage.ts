@@ -193,6 +193,25 @@ export async function removeProject(spaceId: string, projectId: string): Promise
   })).then((d) => d.projects);
 }
 
+export async function reorderProjectsInStorage(projectIds: string[]): Promise<void> {
+  const allData = await getAllStoredSpaceData();
+  const orderMap = new Map<string, number>();
+  projectIds.forEach((id, idx) => orderMap.set(id, idx));
+
+  for (const [sId, data] of allData.entries()) {
+    if (data.projects.length === 0) continue;
+    const sorted = [...data.projects].sort((a, b) => {
+      const idxA = orderMap.has(a.id) ? orderMap.get(a.id)! : 999999;
+      const idxB = orderMap.has(b.id) ? orderMap.get(b.id)! : 999999;
+      return idxA - idxB;
+    });
+    await updateSpaceData(sId, (d) => ({
+      ...d,
+      projects: sorted,
+    }));
+  }
+}
+
 export async function setTaskProjectLinks(
   spaceId: string,
   goalIds: string[],
