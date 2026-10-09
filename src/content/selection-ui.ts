@@ -5,7 +5,7 @@
  * and maintains a rock-solid, persistent floating Selection Manager bar without jitter or flicker.
  */
 
-import { scanGoalRows } from "./adapter";
+import { goalIdFromWrapper, scanGoalRows } from "./adapter";
 import { openDuplicateModal } from "./duplicate-modal";
 import { openSchedulerModal } from "./scheduler-modal";
 import { openTemplatesModal } from "./templates-modal";
@@ -127,17 +127,15 @@ function injectSelectionStyles(): void {
       user-select: none;
       z-index: 5;
     }
-    /* Show smoothly when row is hovered OR when Selection Mode is active */
-    .GoalRow:hover .${CHECKBOX_CLASS},
+    /* Show smoothly when Selection Mode is active (Zero layout shift on normal hover) */
     body[data-tse-selecting="true"] .${CHECKBOX_CLASS},
     .${CHECKBOX_CLASS}[data-tse-state="checked"],
     .${CHECKBOX_CLASS}[data-tse-state="partial"] {
       width: 18px;
       margin-inline-end: 7px;
-      opacity: 0.65;
+      opacity: 0.75;
       pointer-events: auto;
     }
-    .GoalRow:hover .${CHECKBOX_CLASS}:hover,
     .${CHECKBOX_CLASS}[data-tse-state="checked"],
     .${CHECKBOX_CLASS}[data-tse-state="partial"] {
       opacity: 1;
@@ -479,37 +477,6 @@ export function reconcileCheckboxes(): void {
 
       // Insert at the very front of the horizontal content line
       targetParent.prepend(btn);
-
-      // Support Shift + Click anywhere on the task row
-      row.addEventListener("click", (e) => {
-        if (document.querySelector(".tse-dash-overlay, .tse-modal-backdrop")) return;
-        if (e.shiftKey) {
-          const t = e.target as HTMLElement | null;
-          if (t?.closest("a, button, input, [role='checkbox'], [role='menu']")) return;
-          e.preventDefault();
-          e.stopPropagation();
-          selectRangeTo(goalId);
-        }
-      });
-
-      // Middle-click (wheel click) anywhere on task row toggles selection
-      row.addEventListener("mousedown", (e) => {
-        if (e.button === 1) {
-          e.preventDefault();
-        }
-      });
-      row.addEventListener("auxclick", (e) => {
-        if (document.querySelector(".tse-dash-overlay, .tse-modal-backdrop")) return;
-        if (e.button === 1) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.shiftKey) {
-            selectRangeTo(goalId);
-          } else {
-            toggleGoalWithTree(goalId);
-          }
-        }
-      });
     }
 
     updateCheckboxEl(btn, goalId);
@@ -997,5 +964,54 @@ export function initSelectionUI(): () => void {
     reconcileSelectionBar();
   });
 
-  return unsub;
+  // Global document-level delegation for middle-click and shift-click selection on goal rows
+  let lastToggledTime = 0;
+  const toggleMiddle = (e: MouseEvent) => {
+    if (e.button === 1) {
+      const target = e.target as HTMLElement | null;
+      const wrapper = target?.closest<HTMLElement>(".GoalRowWrapper");
+      if (!wrapper) return;
+      const goalId = goalIdFromWrapper(wrapper);
+      if (!goalId) return;
+      const now = Date.now();
+      if (now - lastToggledTime < 150) return;
+      lastToggledTime = now;
+      if (document.querySelector(".tse-dash-overlay, .tse-modal-backdrop")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        selectRangeTo(goalId);
+      } else {
+        toggleGoalWithTree(goalId);
+      }
+    }
+  };
+
+  const handleShiftClick = (e: MouseEvent) => {
+    if (e.shiftKey && e.button === 0) {
+      if (document.querySelector(".tse-dash-overlay, .tse-modal-backdrop")) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("a, button, input, [role='checkbox'], [role='menu']")) return;
+      const wrapper = target?.closest<HTMLElement>(".GoalRowWrapper");
+      if (!wrapper) return;
+      const goalId = goalIdFromWrapper(wrapper);
+      if (!goalId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectRangeTo(goalId);
+    }
+  };
+
+  document.addEventListener("mousedown", toggleMiddle, true);
+  document.addEventListener("mouseup", toggleMiddle, true);
+  document.addEventListener("auxclick", toggleMiddle, true);
+  document.addEventListener("click", handleShiftClick, true);
+
+  return () => {
+    unsub();
+    document.removeEventListener("mousedown", toggleMiddle, true);
+    document.removeEventListener("mouseup", toggleMiddle, true);
+    document.removeEventListener("auxclick", toggleMiddle, true);
+    document.removeEventListener("click", handleShiftClick, true);
+  };
 }

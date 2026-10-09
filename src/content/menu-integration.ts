@@ -24,6 +24,7 @@ import { openDuplicateModal } from "./duplicate-modal";
 import { openTemplatesModal } from "./templates-modal";
 import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import { pushAction } from "./history";
+import { toggleGoalWithTree } from "./selection-state";
 import type { TaskTextConfig } from "../shared/types";
 
 const MENU_SIGNATURE = ["Duplicate", "Delete"];
@@ -727,6 +728,20 @@ function maybeInject(menu: Element): boolean {
     openTextDirectionFlyout(goalId, dirRow, menu);
   });
   section.appendChild(dirRow);
+
+  // Multi-select Row (toggles task in selection bar without hover clutter)
+  const selectRow = document.createElement("button");
+  selectRow.type = "button";
+  selectRow.className = "tse-menu-row";
+  const selectLabel = document.createElement("span");
+  selectLabel.textContent = "Select task";
+  selectRow.appendChild(selectLabel);
+  selectRow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeNativeMenu();
+    toggleGoalWithTree(goalId);
+  });
+  section.appendChild(selectRow);
 
   // Insert cleanly at the top of the menu items (before the native color swatches / Assign)
   const firstChild = menu.firstElementChild;

@@ -605,10 +605,23 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
 
     if (msg.checked) {
       // =======================================================================
-      // CHECK: Walk UP ancestors.
+      // CHECK: Walk UP ancestors (Day -> Week -> Month -> Quarter -> Year -> Decade -> Life).
+      // Multi-tier recursive validation: A subgoal `g` is complete if:
+      //   1. g.id === msg.goalId (just checked)
+      //   2. OR g.checked === true
+      //   3. OR (g has subgoals and 100% of its subgoals are complete!)
       // If and only if 100% of the subgoals of an ancestor are checked, check it!
-      // If ANY subgoal is unchecked (e.g. 1 of 4), STOP immediately!
       // =======================================================================
+      const isGoalDone = (g: TSGoal): boolean => {
+        if (g.id === msg.goalId) return true;
+        if (g.checked) return true;
+        const kids = childrenByParent.get(g.id);
+        if (kids && kids.length > 0) {
+          return kids.every((k) => isGoalDone(k));
+        }
+        return false;
+      };
+
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
         const parent = byId.get(currParentId);
@@ -618,7 +631,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         if (subgoals.length === 0) break;
 
         // Check if every single subgoal under this parent is checked
-        const allDone = subgoals.every((s) => (s.id === msg.goalId ? true : s.checked));
+        const allDone = subgoals.every((s) => isGoalDone(s));
         if (allDone) {
           if (!parent.checked) {
             try {
@@ -629,7 +642,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
               console.warn("[TSE] auto-complete parent failed", parent.id, err);
             }
           }
-          // Move up to inspect the grandparent!
+          // Move up to inspect the grandparent/higher horizons!
           currParentId = parent.parent_id;
         } else {
           // At least one sibling is unchecked: this parent cannot be complete!
@@ -638,7 +651,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       }
     } else {
       // =======================================================================
-      // UNCHECK: Walk UP ancestors.
+      // UNCHECK: Walk UP ancestors (Full reverse cascade).
       // Since this subgoal is now unchecked, NO ancestor above it can be complete!
       // Ensure all ancestors are marked unchecked!
       // =======================================================================
@@ -647,19 +660,119 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         const parent = byId.get(currParentId);
         if (!parent) break;
 
-        try {
-          await client.updateGoal(parent.id, { checked: false });
-        } catch (err) {
-          console.warn("[TSE] auto-uncheck parent failed", parent.id, err);
+        if (parent.checked) {
+          try {
+            await client.updateGoal(parent.id, { checked: false });
+          } catch (err) {
+            console.warn("[TSE] auto-uncheck parent failed", parent.id, err);
+          }
+          parent.checked = false;
+          parentIdsToUncheck.push(parent.id);
         }
-        parent.checked = false;
-        parentIdsToUncheck.push(parent.id);
-
         currParentId = parent.parent_id;
       }
     }
 
     return { parentIdsToCheck, parentIdsToUncheck };
+  },
+  UNCHECK_ALL_DESCENDANTS: async (msg) => {
+    let client: TimestripeApi;
+    try {
+      client = await api();
+    } catch {
+      return { success: false, uncheckedIds: [] };
+    }
+
+    let goals: TSGoal[] = [];
+    try {
+      const spaces = await client.listSpaces();
+      const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
+      goals = lists.flat();
+    } catch {
+      return { success: false, uncheckedIds: [] };
+    }
+
+    const childrenByParent = new Map<string, TSGoal[]>();
+    for (const g of goals) {
+      if (g.parent_id) {
+        const list = childrenByParent.get(g.parent_id) ?? [];
+        list.push(g);
+        childrenByParent.set(g.parent_id, list);
+      }
+    }
+
+    // Collect all descendants (children, grandchildren, etc.)
+    const uncheckedIds: string[] = [];
+    const queue = [msg.goalId];
+    while (queue.length > 0) {
+      const pId = queue.shift()!;
+      const kids = childrenByParent.get(pId) ?? [];
+      for (const k of kids) {
+        if (k.checked) {
+          uncheckedIds.push(k.id);
+        }
+        queue.push(k.id);
+      }
+    }
+
+    // Uncheck all checked descendants
+    await Promise.all(
+      uncheckedIds.map((id) =>
+        client.updateGoal(id, { checked: false }).catch((err) => {
+          console.warn("[TSE] failed to uncheck descendant", id, err);
+        }),
+      ),
+    );
+
+    // Also uncheck the parent goal itself on Timestripe API
+    await client.updateGoal(msg.goalId, { checked: false }).catch(() => {});
+
+    return { success: true, uncheckedIds };
+  },
+  CHECK_SUBGOALS_STATUS: async (msg) => {
+    let client: TimestripeApi;
+    try {
+      client = await api();
+    } catch {
+      return { hasCheckedSubgoals: false, count: 0, childIds: [] };
+    }
+
+    let goals: TSGoal[] = [];
+    try {
+      const spaces = await client.listSpaces();
+      const lists = await Promise.all(spaces.map((s) => client.listGoals(s.id).catch(() => [])));
+      goals = lists.flat();
+    } catch {
+      return { hasCheckedSubgoals: false, count: 0, childIds: [] };
+    }
+
+    const childrenByParent = new Map<string, TSGoal[]>();
+    for (const g of goals) {
+      if (g.parent_id) {
+        const list = childrenByParent.get(g.parent_id) ?? [];
+        list.push(g);
+        childrenByParent.set(g.parent_id, list);
+      }
+    }
+
+    const checkedChildIds: string[] = [];
+    const queue = [msg.goalId];
+    while (queue.length > 0) {
+      const pId = queue.shift()!;
+      const kids = childrenByParent.get(pId) ?? [];
+      for (const k of kids) {
+        if (k.checked) {
+          checkedChildIds.push(k.id);
+        }
+        queue.push(k.id);
+      }
+    }
+
+    return {
+      hasCheckedSubgoals: checkedChildIds.length > 0,
+      count: checkedChildIds.length,
+      childIds: checkedChildIds,
+    };
   },
   EXPORT_BACKUP: async () => {
     const aliveGoalIds = await getAliveGoalIds();

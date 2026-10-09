@@ -340,14 +340,12 @@ await step("T12 marquee drag cannot start inside the open dashboard", async () =
 
 // ------------------------- Selection & Scheduler -------------------------
 await step("T13 row checkboxes open the Selection Manager bar", async () => {
-  // Checkboxes are hover-revealed by design — hover, then click
+  // Middle-click triggers selection mode without hover layout shift
   const rowA = page.locator(".GoalRowWrapper[data-draggable-id='col1::goal:AAAAAAAA']");
-  await rowA.hover();
-  await rowA.locator(".tse-select-btn").click();
-  const rowB = page.locator(".GoalRowWrapper[data-draggable-id='col1::goal:BBBBBBBB']");
-  await rowB.hover();
-  await rowB.locator(".tse-select-btn").click();
+  await rowA.click({ button: "middle" });
   await page.waitForSelector("#tse-selection-bar", { timeout: 3000 });
+  const rowB = page.locator(".GoalRowWrapper[data-draggable-id='col1::goal:BBBBBBBB']");
+  await rowB.locator(".tse-select-btn").click();
 });
 
 await step("T13b flyout lists parents only; hovering the parent opens its children", async () => {

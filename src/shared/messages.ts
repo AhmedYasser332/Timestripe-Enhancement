@@ -72,6 +72,23 @@ export type AutoCompleteParentResult = {
   parentIdsToCheck: string[];
   parentIdsToUncheck: string[];
 };
+export type UncheckAllDescendantsMessage = {
+  type: "UNCHECK_ALL_DESCENDANTS";
+  goalId: string;
+};
+export type UncheckAllDescendantsResult = {
+  success: boolean;
+  uncheckedIds: string[];
+};
+export type CheckSubgoalsStatusMessage = {
+  type: "CHECK_SUBGOALS_STATUS";
+  goalId: string;
+};
+export type CheckSubgoalsStatusResult = {
+  hasCheckedSubgoals: boolean;
+  count: number;
+  childIds: string[];
+};
 export type ExportBackupMessage = { type: "EXPORT_BACKUP" };
 export type RefreshBackupMessage = { type: "REFRESH_BACKUP" };
 export type ImportBackupMessage = {
@@ -122,6 +139,8 @@ export type BgMessage =
   | ApplyTemplateMessage
   | SetTaskTextConfigMessage
   | AutoCompleteParentMessage
+  | UncheckAllDescendantsMessage
+  | CheckSubgoalsStatusMessage
   | ExportBackupMessage
   | RefreshBackupMessage
   | ImportBackupMessage
@@ -168,6 +187,8 @@ export type BgResponseMap = {
   APPLY_TEMPLATE: SmartDuplicateResult;
   SET_TASK_TEXT_CONFIG: null;
   AUTO_COMPLETE_PARENT: AutoCompleteParentResult;
+  UNCHECK_ALL_DESCENDANTS: UncheckAllDescendantsResult;
+  CHECK_SUBGOALS_STATUS: CheckSubgoalsStatusResult;
   EXPORT_BACKUP: BackupPayload;
   REFRESH_BACKUP: { backup: BackupPayload; prunedTotal: number; prunedLinks: number };
   IMPORT_BACKUP: { restoredProjects: number; restoredTemplates: number };
