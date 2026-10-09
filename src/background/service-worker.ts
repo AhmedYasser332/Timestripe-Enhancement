@@ -610,7 +610,15 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     return msg.project;
   },
   REORDER_PROJECTS: async (msg) => {
-    await reorderProjectsInStorage(msg.projectIds);
+    if (msg.projects && Array.isArray(msg.projects)) {
+      for (const p of msg.projects) {
+        await upsertProjectWithScope(p);
+      }
+      const ids = msg.projects.map((p) => p.id);
+      await reorderProjectsInStorage(ids);
+    } else if (msg.projectIds) {
+      await reorderProjectsInStorage(msg.projectIds);
+    }
     await broadcastStateChanged();
     const settings = await getSettings();
     return getProjectsForSpace(settings.activeSpaceId);

@@ -6,6 +6,7 @@ import {
   flattenTree,
   isDescendant,
   projectPath,
+  reorderProjectTree,
   subtreeTaskCount,
 } from "../src/shared/project-tree";
 import type { Project } from "../src/shared/types";
@@ -113,6 +114,33 @@ describe("Project Tree (sub-projects)", () => {
       expect(subtreeTaskCount(TREE, "seek", counts)).toBe(9); // 2 + 3 + 4 (aqida has none)
       expect(subtreeTaskCount(TREE, "work", counts)).toBe(5);
       expect(subtreeTaskCount(TREE, "aqida", counts)).toBe(0);
+    });
+  });
+
+  describe("reorderProjectTree", () => {
+    it("moves parent project together with all its children and descendants", () => {
+      // TREE is: seek (with children fiqh -> shafii, aqida), work
+      // If we move seek to after work:
+      // seek and all its descendants (fiqh, aqida, shafii) must move after work!
+      const reordered = reorderProjectTree(TREE, "seek", "work", "after");
+      const ids = reordered.map((p) => p.id);
+      expect(ids).toEqual(["work", "seek", "fiqh", "aqida", "shafii"]);
+    });
+
+    it("prevents dropping a parent into one of its own descendants", () => {
+      // Attempting to move seek into its descendant fiqh or shafii must be rejected
+      const attempt1 = reorderProjectTree(TREE, "seek", "fiqh", "before");
+      expect(attempt1).toBe(TREE);
+
+      const attempt2 = reorderProjectTree(TREE, "seek", "shafii", "after");
+      expect(attempt2).toBe(TREE);
+    });
+
+    it("reorders siblings cleanly before or after", () => {
+      // Move work before seek
+      const reordered = reorderProjectTree(TREE, "work", "seek", "before");
+      const ids = reordered.map((p) => p.id);
+      expect(ids).toEqual(["work", "seek", "fiqh", "aqida", "shafii"]);
     });
   });
 });

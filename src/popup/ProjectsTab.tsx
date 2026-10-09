@@ -7,6 +7,7 @@ import {
   effectiveColor,
   flattenTree,
   projectPath,
+  reorderProjectTree,
   subtreeTaskCount,
   type ProjectTreeNode,
 } from "../shared/project-tree";
@@ -47,6 +48,7 @@ export function ProjectsTab(): React.JSX.Element {
   } | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<{ id: string; isTop: boolean } | null>(null);
+  const [draggableId, setDraggableId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [data, view, spList] = await Promise.all([
@@ -167,16 +169,9 @@ export function ProjectsTab(): React.JSX.Element {
     }
   };
 
-  const reorderProjects = async (newOrderIds: string[]) => {
-    const idMap = new Map<string, number>();
-    newOrderIds.forEach((id, idx) => idMap.set(id, idx));
-    const sorted = [...projects].sort((a, b) => {
-      const idxA = idMap.has(a.id) ? idMap.get(a.id)! : 999999;
-      const idxB = idMap.has(b.id) ? idMap.get(b.id)! : 999999;
-      return idxA - idxB;
-    });
-    setProjects(sorted);
-    await callBg<Project[]>({ type: "REORDER_PROJECTS", projectIds: newOrderIds });
+  const reorderProjects = async (nextProjects: Project[]) => {
+    setProjects(nextProjects);
+    await callBg<Project[]>({ type: "REORDER_PROJECTS", projects: nextProjects });
     await load();
   };
 
@@ -185,12 +180,8 @@ export function ProjectsTab(): React.JSX.Element {
     const sIdx = siblings.findIndex((x) => x.id === p.id);
     if (sIdx <= 0) return;
     const prev = siblings[sIdx - 1];
-    const idxA = projects.findIndex((x) => x.id === p.id);
-    const idxB = projects.findIndex((x) => x.id === prev.id);
-    const next = [...projects];
-    next[idxA] = prev;
-    next[idxB] = p;
-    void reorderProjects(next.map((x) => x.id));
+    const next = reorderProjectTree(projects, p.id, prev.id, "before");
+    void reorderProjects(next);
   };
 
   const moveDown = (p: Project) => {
@@ -198,12 +189,8 @@ export function ProjectsTab(): React.JSX.Element {
     const sIdx = siblings.findIndex((x) => x.id === p.id);
     if (sIdx >= siblings.length - 1) return;
     const nxt = siblings[sIdx + 1];
-    const idxA = projects.findIndex((x) => x.id === p.id);
-    const idxB = projects.findIndex((x) => x.id === nxt.id);
-    const next = [...projects];
-    next[idxA] = nxt;
-    next[idxB] = p;
-    void reorderProjects(next.map((x) => x.id));
+    const next = reorderProjectTree(projects, p.id, nxt.id, "after");
+    void reorderProjects(next);
   };
 
   // Build tree order with ancestor continuation flags for rails
@@ -268,7 +255,7 @@ export function ProjectsTab(): React.JSX.Element {
                   style={{
                     paddingInlineStart: `${6 + node.depth * 18}px`,
                   }}
-                  draggable
+                  draggable={draggableId === p.id}
                   onDragStart={(e) => {
                     setDraggedId(p.id);
                     e.dataTransfer.setData("text/plain", p.id);
@@ -276,6 +263,7 @@ export function ProjectsTab(): React.JSX.Element {
                   onDragEnd={() => {
                     setDraggedId(null);
                     setDragOverId(null);
+                    setDraggableId(null);
                   }}
                   onDragOver={(e) => {
                     if (!draggedId || draggedId === p.id) return;
@@ -292,16 +280,13 @@ export function ProjectsTab(): React.JSX.Element {
                     if (!draggedId || draggedId === p.id) return;
                     const rect = e.currentTarget.getBoundingClientRect();
                     const isTop = e.clientY < rect.top + rect.height / 2;
-                    const next = [...projects];
-                    const srcIdx = next.findIndex((x) => x.id === draggedId);
-                    if (srcIdx < 0) return;
-                    const [moved] = next.splice(srcIdx, 1);
-                    const tgtIdx = next.findIndex((x) => x.id === p.id);
-                    const insertIdx = isTop ? tgtIdx : tgtIdx + 1;
-                    next.splice(insertIdx, 0, moved);
+                    const next = reorderProjectTree(projects, draggedId, p.id, isTop ? "before" : "after");
                     setDraggedId(null);
                     setDragOverId(null);
-                    void reorderProjects(next.map((x) => x.id));
+                    setDraggableId(null);
+                    if (next !== projects) {
+                      void reorderProjects(next);
+                    }
                   }}
                 >
                   {/* Connector rails */}
@@ -323,7 +308,14 @@ export function ProjectsTab(): React.JSX.Element {
                   })}
 
                   {/* Drag handle */}
-                  <span className="popup-drag-handle" title="Drag to reorder">⋮⋮</span>
+                  <span
+                    className="popup-drag-handle"
+                    title="Drag to reorder"
+                    onPointerDown={() => setDraggableId(p.id)}
+                    onMouseDown={() => setDraggableId(p.id)}
+                  >
+                    ⋮⋮
+                  </span>
 
                   {/* Expander toggle */}
                   {hasChildren ? (

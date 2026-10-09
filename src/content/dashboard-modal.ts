@@ -19,6 +19,7 @@ import {
   effectiveColor,
   flattenTree,
   projectPath,
+  reorderProjectTree,
   subtreeTaskCount,
   type ProjectTreeNode,
 } from "../shared/project-tree";
@@ -587,10 +588,10 @@ function injectDashboardStyles(): void {
       background: rgba(255, 255, 255, 0.03);
     }
     .tse-project-row.tse-drag-over-top {
-      border-top: 2px solid #00A8FF !important;
+      box-shadow: inset 0 2px 0 0 #00A8FF !important;
     }
     .tse-project-row.tse-drag-over-bottom {
-      border-bottom: 2px solid #00A8FF !important;
+      box-shadow: inset 0 -2px 0 0 #00A8FF !important;
     }
 
     .tse-drag-handle {
@@ -1834,8 +1835,20 @@ function updateProjectsList(
       }
     }
 
-    // Drag-and-drop support
-    row.draggable = true;
+    // Drag handle
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "tse-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "Drag to reorder";
+
+    // Drag-and-drop: initiate ONLY when grabbing the drag handle
+    dragHandle.addEventListener("pointerdown", () => {
+      row.draggable = true;
+    });
+    dragHandle.addEventListener("mousedown", () => {
+      row.draggable = true;
+    });
+
     row.addEventListener("dragstart", (e) => {
       draggedId = p.id;
       row.classList.add("tse-dragging");
@@ -1845,6 +1858,7 @@ function updateProjectsList(
       }
     });
     row.addEventListener("dragend", () => {
+      row.draggable = false;
       draggedId = null;
       itemsContainer.querySelectorAll(".tse-project-row").forEach((r) => {
         r.classList.remove("tse-dragging", "tse-drag-over-top", "tse-drag-over-bottom");
@@ -1869,25 +1883,15 @@ function updateProjectsList(
       const rect = row.getBoundingClientRect();
       const isTop = e.clientY < rect.top + rect.height / 2;
 
-      const sourceIdx = projects.findIndex((x) => x.id === draggedId);
-      if (sourceIdx < 0) return;
-      const [moved] = projects.splice(sourceIdx, 1);
-      const targetIdx = projects.findIndex((x) => x.id === p.id);
-      const insertIdx = isTop ? targetIdx : targetIdx + 1;
-      projects.splice(insertIdx, 0, moved);
+      // Moves the parent AND its entire subtree of children together atomically!
+      const nextProjects = reorderProjectTree(projects, draggedId, p.id, isTop ? "before" : "after");
+      if (nextProjects === projects) return;
 
-      const projectIds = projects.map((x) => x.id);
       void (async () => {
-        await sendToBg({ type: "REORDER_PROJECTS", projectIds });
+        await sendToBg({ type: "REORDER_PROJECTS", projects: nextProjects });
         await refresh();
       })();
     });
-
-    // Drag handle
-    const dragHandle = document.createElement("span");
-    dragHandle.className = "tse-drag-handle";
-    dragHandle.textContent = "⋮⋮";
-    dragHandle.title = "Drag to reorder";
 
     // Expand/collapse toggle for parents (or a spacer to keep rows aligned)
     if (node.children.length > 0) {
@@ -1950,13 +1954,9 @@ function updateProjectsList(
     bindActivate(upBtn, () => {
       if (sIdx <= 0) return;
       const prev = siblings[sIdx - 1];
-      const idxA = projects.findIndex((x) => x.id === p.id);
-      const idxB = projects.findIndex((x) => x.id === prev.id);
-      const next = [...projects];
-      next[idxA] = prev;
-      next[idxB] = p;
+      const nextProjects = reorderProjectTree(projects, p.id, prev.id, "before");
       void (async () => {
-        await sendToBg({ type: "REORDER_PROJECTS", projectIds: next.map((x) => x.id) });
+        await sendToBg({ type: "REORDER_PROJECTS", projects: nextProjects });
         await refresh();
       })();
     });
@@ -1970,13 +1970,9 @@ function updateProjectsList(
     bindActivate(downBtn, () => {
       if (sIdx >= siblings.length - 1) return;
       const nxt = siblings[sIdx + 1];
-      const idxA = projects.findIndex((x) => x.id === p.id);
-      const idxB = projects.findIndex((x) => x.id === nxt.id);
-      const next = [...projects];
-      next[idxA] = nxt;
-      next[idxB] = p;
+      const nextProjects = reorderProjectTree(projects, p.id, nxt.id, "after");
       void (async () => {
-        await sendToBg({ type: "REORDER_PROJECTS", projectIds: next.map((x) => x.id) });
+        await sendToBg({ type: "REORDER_PROJECTS", projects: nextProjects });
         await refresh();
       })();
     });

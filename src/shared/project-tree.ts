@@ -134,3 +134,55 @@ export function subtreeTaskCount(
   for (const d of descendantsOf(projects, projectId)) total += directCounts.get(d.id) ?? 0;
   return total;
 }
+
+/**
+ * Reorders a project (and its entire subtree of descendants) before or after a target project.
+ * - Entire subtree (children, grandchildren) moves atomically with the parent.
+ * - Prevents circular references (cannot drop a parent onto any of its descendants).
+ * - Adopts the target's parentId so it becomes a sibling of the target.
+ */
+export function reorderProjectTree(
+  projects: Project[],
+  sourceId: string,
+  targetId: string,
+  position: "before" | "after",
+): Project[] {
+  if (sourceId === targetId) return projects;
+
+  const descendants = descendantsOf(projects, sourceId);
+  const movingIds = new Set([sourceId, ...descendants.map((d) => d.id)]);
+
+  // Cannot drop a project into its own descendant
+  if (movingIds.has(targetId)) return projects;
+
+  const targetProject = projects.find((p) => p.id === targetId);
+  if (!targetProject) return projects;
+
+  // Moving items in relative order
+  const movingItems = projects
+    .filter((p) => movingIds.has(p.id))
+    .map((p) => {
+      // Root of moving subtree adopts target's parentId
+      if (p.id === sourceId) {
+        return { ...p, parentId: targetProject.parentId ?? null };
+      }
+      return p;
+    });
+
+  const remaining = projects.filter((p) => !movingIds.has(p.id));
+
+  if (position === "before") {
+    const targetIdx = remaining.findIndex((p) => p.id === targetId);
+    if (targetIdx < 0) return projects;
+    remaining.splice(targetIdx, 0, ...movingItems);
+  } else {
+    // Insert after target AND after all target's descendants
+    const targetDescendants = descendantsOf(remaining, targetId);
+    const lastTargetItem = targetDescendants[targetDescendants.length - 1] ?? targetProject;
+    const lastIdx = remaining.findIndex((p) => p.id === lastTargetItem.id);
+    if (lastIdx < 0) return projects;
+    remaining.splice(lastIdx + 1, 0, ...movingItems);
+  }
+
+  return remaining;
+}
