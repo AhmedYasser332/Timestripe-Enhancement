@@ -370,3 +370,138 @@ describe("commitMetadataAtomically: storage failure during duplicate metadata", 
     expect(stores.sp1.taskColorOverrides).toEqual({ g: "#abc" });
   });
 });
+
+describe("executeBulkDelete: restore after a partial successful delete", () => {
+  it("does not move a child back under a parent that was already deleted", async () => {
+    // Month > Week > Day(unselected). Week is selected, Month is selected. Deepest-first order is
+    // [week, month]. Week deletes OK, then month delete fails. The day was moved out of the week
+    // before the batch started; its original parent (the week) is now gone, so it must NOT be restored.
+    const plan = planBulkDelete(["m", "w1"], tree);
+    const store = makeStore(tree);
+    const current = new Map(tree.map((g) => [g.id, g.parent_id]));
+    const parents = new Map(tree.map((g) => [g.id, g.parent_id]));
+    const restoreCalls: string[] = [];
+
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async (goalId, parentId) => {
+          if (parentId === "w1" && goalId === "d2") restoreCalls.push(goalId);
+          current.set(goalId, parentId);
+          store.alive.get(goalId)!.parent_id = parentId;
+        },
+        remove: async (goalId) => {
+          if (goalId === "m") throw new Error("HTTP 503 on month");
+          store.removeSubtree(goalId);
+        },
+      },
+      parents,
+    );
+
+    expect(outcome.deleted).toEqual(["w1"]);
+    expect(outcome.abortReason).toContain("Stopped after removal of m failed");
+    // d2 must not be sent back to the deleted week.
+    expect(restoreCalls).toEqual([]);
+    expect(outcome.restoreSkipped.map((s) => s.goalId)).toContain("d2");
+    expect(outcome.restoreSkipped.find((s) => s.goalId === "d2")!.reason).toContain("w1 was deleted");
+    // Month is still alive, and d2 remains where the batch left it (under the top level, not the deleted week).
+    expect(store.alive.has("m")).toBe(true);
+    expect(store.alive.has("w1")).toBe(false);
+  });
+
+  it("still restores a child whose original parent survives the batch", async () => {
+    const plan = planBulkDelete(["w1", "w2"], tree);
+    const parents = new Map(tree.map((g) => [g.id, g.parent_id]));
+    const moved: string[] = [];
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async (goalId) => {
+          moved.push(goalId);
+        },
+        remove: async (goalId) => {
+          if (goalId === "w2") throw new Error("HTTP 500");
+        },
+      },
+      parents,
+    );
+    // d1 and d2 were moved out of w1 (their original parent, which was deleted OK).
+    // Restore is skipped for them because w1 was deleted; w2 failed so nothing else is skipped.
+    expect(outcome.restoreSkipped.map((s) => s.goalId).sort()).toEqual(["d1", "d2"]);
+    expect(outcome.deleted).toEqual(["w1"]);
+  });
+});
+
+import { MetadataCleanupError } from "../src/shared/planning";
+
+describe("commitMetadataAtomically: cleanup failure is reported, not swallowed", () => {
+  it("throws MetadataCleanupError naming the space whose undo also failed", async () => {
+    const stores: Record<string, SpaceData> = {
+      sp1: { projects: [], taskProjectLinks: {}, taskColorOverrides: {} },
+      sp2: { projects: [], taskProjectLinks: {}, taskColorOverrides: {} },
+    };
+    const writes = new Map([
+      ["sp1", { links: { n1: { projectId: "p" } }, colors: {} }],
+      ["sp2", { links: { n2: { projectId: "p" } }, colors: {} }],
+    ]);
+    // Call sequence: 1) write sp1 OK, 2) write sp2 fails, 3) undo sp1 fails.
+    let call = 0;
+    const update = async (spaceId: string, mutate: (d: SpaceData) => SpaceData) => {
+      call++;
+      if (call === 2) throw new Error("quota");
+      if (call === 3) throw new Error("undo failed");
+      stores[spaceId] = mutate(stores[spaceId]);
+    };
+
+    const err = await commitMetadataAtomically(writes, new Set(["n1", "n2"]), update).catch((e) => e);
+    expect(err).toBeInstanceOf(MetadataCleanupError);
+    expect(err.leftoverSpaces).toEqual(["sp1"]);
+    expect(err.message).toContain("sp1");
+    expect(err.message).toContain("quota");
+    expect(call).toBe(3);
+  });
+});
+
+describe("duplicate: storage failure after goals are created", () => {
+  it("rolls back the created goals and reports the metadata cleanup problem", async () => {
+    const remote = new Set<string>();
+    const created = ["g1", "g2", "g3"];
+    const stores: Record<string, SpaceData> = {
+      sp1: { projects: [], taskProjectLinks: {}, taskColorOverrides: {} },
+      sp2: { projects: [], taskProjectLinks: {}, taskColorOverrides: {} },
+    };
+    const writes = new Map([
+      ["sp1", { links: { g1: { projectId: "p" } }, colors: {} }],
+      ["sp2", { links: { g3: { projectId: "p" } }, colors: {} }],
+    ]);
+    let call = 0;
+    const update = async (spaceId: string, mutate: (d: SpaceData) => SpaceData) => {
+      call++;
+      if (call === 2) throw new Error("storage quota exceeded");
+      if (call === 3) throw new Error("undo failed");
+      stores[spaceId] = mutate(stores[spaceId]);
+    };
+
+    const err = await withCreationRollback(
+      async (track) => {
+        for (const id of created) {
+          await Promise.resolve();
+          remote.add(id);
+          track(id);
+        }
+        await commitMetadataAtomically(writes, new Set(created), update);
+      },
+      async (id) => {
+        remote.delete(id);
+      },
+    ).catch((e) => e);
+
+    // Created goals are rolled back on the remote side.
+    expect(remote.size).toBe(0);
+    expect(err).toBeInstanceOf(CreationAbortedError);
+    // The cleanup failure is visible in the message, not hidden behind the storage error.
+    expect(err.message).toContain("storage quota exceeded");
+    expect(err.message).toContain("Could not undo metadata in space(s): sp1");
+    expect(err.message).toContain("Rolled back 3 of 3");
+  });
+});

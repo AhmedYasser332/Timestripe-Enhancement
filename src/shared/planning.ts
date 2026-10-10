@@ -72,6 +72,11 @@ export interface DeleteOutcome {
   failed: Array<{ goalId: string; error: string }>;
   /** Moves that were applied and then reverted because the batch stopped. */
   restored: string[];
+  /**
+   * Moves not reverted because the original parent was already deleted (or sits under a deleted
+   * goal). Restoring them would point the child at a parent that no longer exists.
+   */
+  restoreSkipped: Array<{ goalId: string; reason: string }>;
   /** Moves that could not be reverted; these goals sit in a new place and need manual review. */
   restoreFailed: Array<{ goalId: string; error: string }>;
   abortReason: string | null;
@@ -91,12 +96,33 @@ export async function executeBulkDelete(
 ): Promise<DeleteOutcome> {
   const applied: string[] = [];
   const restored: string[] = [];
+  const restoreSkipped: DeleteOutcome["restoreSkipped"] = [];
   const restoreFailed: DeleteOutcome["restoreFailed"] = [];
+  const deleted: string[] = [];
+
+  // A restore target is usable only if it and all of its ancestors are still alive. Once a goal
+  // is confirmed deleted, anything beneath it is gone too, so parenting a child there is invalid.
+  const isUsableParent = (parentId: string | null): { ok: true } | { ok: false; reason: string } => {
+    let cur = parentId;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur)) {
+      if (deleted.includes(cur)) return { ok: false, reason: `original parent ${cur} was deleted` };
+      seen.add(cur);
+      cur = originalParents.get(cur) ?? null;
+    }
+    return { ok: true };
+  };
 
   const rollbackMoves = async (): Promise<void> => {
     for (const goalId of [...applied].reverse()) {
+      const target = originalParents.get(goalId) ?? null;
+      const usable = isUsableParent(target);
+      if (!usable.ok) {
+        restoreSkipped.push({ goalId, reason: usable.reason });
+        continue;
+      }
       try {
-        await ops.reparent(goalId, originalParents.get(goalId) ?? null);
+        await ops.reparent(goalId, target);
         restored.push(goalId);
       } catch (e) {
         restoreFailed.push({ goalId, error: errorMessage(e) });
@@ -114,13 +140,13 @@ export async function executeBulkDelete(
         deleted: [],
         failed: plan.selected.map((goalId) => ({ goalId, error: "not attempted" })),
         restored,
+        restoreSkipped,
         restoreFailed,
         abortReason: `Could not protect unselected subgoal ${move.goalId}: ${errorMessage(e)}`,
       };
     }
   }
 
-  const deleted: string[] = [];
   const failed: DeleteOutcome["failed"] = [];
   for (let i = 0; i < plan.selected.length; i++) {
     const goalId = plan.selected[i];
@@ -136,12 +162,13 @@ export async function executeBulkDelete(
         deleted,
         failed,
         restored,
+        restoreSkipped,
         restoreFailed,
         abortReason: `Stopped after removal of ${goalId} failed: ${errorMessage(e)}`,
       };
     }
   }
-  return { deleted, failed, restored, restoreFailed, abortReason: null };
+  return { deleted, failed, restored, restoreSkipped, restoreFailed, abortReason: null };
 }
 
 function partition<V>(
@@ -282,6 +309,17 @@ export type SpaceWrite = {
  * committed is undone for the same goal ids, and the original error is rethrown so the caller's
  * creation rollback still runs.
  */
+/** Thrown when metadata writes failed and some committed writes could not be undone. */
+export class MetadataCleanupError extends Error {
+  constructor(
+    message: string,
+    /** Spaces whose partial metadata for the new goals is still present in storage. */
+    readonly leftoverSpaces: string[],
+  ) {
+    super(message);
+  }
+}
+
 export async function commitMetadataAtomically(
   writes: Map<string, SpaceWrite>,
   newIds: Set<string>,
@@ -301,14 +339,25 @@ export async function commitMetadataAtomically(
       committed.push(spaceId);
     }
   } catch (e) {
+    const leftoverSpaces: string[] = [];
     for (const spaceId of committed) {
-      await update(spaceId, (d) => ({
-        ...d,
-        taskProjectLinks: Object.fromEntries(Object.entries(d.taskProjectLinks).filter(([id]) => !newIds.has(id))),
-        taskColorOverrides: Object.fromEntries(
-          Object.entries(d.taskColorOverrides ?? {}).filter(([id]) => !newIds.has(id)),
-        ),
-      })).catch(() => {});
+      try {
+        await update(spaceId, (d) => ({
+          ...d,
+          taskProjectLinks: Object.fromEntries(Object.entries(d.taskProjectLinks).filter(([id]) => !newIds.has(id))),
+          taskColorOverrides: Object.fromEntries(
+            Object.entries(d.taskColorOverrides ?? {}).filter(([id]) => !newIds.has(id)),
+          ),
+        }));
+      } catch {
+        leftoverSpaces.push(spaceId);
+      }
+    }
+    if (leftoverSpaces.length > 0) {
+      throw new MetadataCleanupError(
+        `${errorMessage(e)}. Could not undo metadata in space(s): ${leftoverSpaces.join(", ")}; orphan links may remain`,
+        leftoverSpaces,
+      );
     }
     throw e;
   }
