@@ -38,7 +38,19 @@ export interface BulkDeleteResult {
 
 export interface SmartDuplicateResult {
   newRootId: string;
+  newRootIds?: string[];
   totalCreated: number;
+}
+
+export interface ScheduleGoalsResult {
+  updated: number;
+  failed: number;
+  results: Array<{
+    goalId: string;
+    success: boolean;
+    date: string | null;
+    error?: string;
+  }>;
 }
 
 // ---------- content script → service worker ----------
@@ -48,7 +60,12 @@ export type GetGoalIndexMessage = { type: "GET_GOAL_INDEX"; spaceId?: string };
 export type AssignProjectsMessage = { type: "ASSIGN_PROJECTS"; goalIds: string[]; projectId: string | null };
 export type SetColorOverrideMessage = { type: "SET_COLOR_OVERRIDE"; goalIds: string[]; color: string | null };
 export type BulkDeleteGoalsMessage = { type: "BULK_DELETE_GOALS"; goalIds: string[] };
-export type SmartDuplicateMessage = { type: "SMART_DUPLICATE"; goalId: string; options: DuplicateOptions };
+export type SmartDuplicateMessage = {
+  type: "SMART_DUPLICATE";
+  goalId?: string;
+  goalIds?: string[];
+  options: DuplicateOptions;
+};
 export type GetGoalDetailsMessage = { type: "GET_GOAL_DETAILS"; goalId: string };
 export type ScheduleGoalsMessage = {
   type: "SCHEDULE_GOALS";
@@ -186,7 +203,7 @@ export type BgResponseMap = {
   BULK_DELETE_GOALS: BulkDeleteResult;
   SMART_DUPLICATE: SmartDuplicateResult;
   GET_GOAL_DETAILS: TSGoal;
-  SCHEDULE_GOALS: { updated: number };
+  SCHEDULE_GOALS: ScheduleGoalsResult;
   LIST_TEMPLATES: GoalTemplate[];
   SAVE_TEMPLATE: GoalTemplate;
   DELETE_TEMPLATE: null;

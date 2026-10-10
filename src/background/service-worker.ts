@@ -175,50 +175,14 @@ async function getViewState(): Promise<ViewState> {
 async function bulkDeleteGoals(goalIds: string[]): Promise<BulkDeleteResult> {
   const spaceId = await requireActiveSpaceId();
   const client = await api();
-  const parents = await getGoalParents(spaceId);
-  const rootsToDelete = findTopLevelRoots(goalIds, parents);
-
-  let completed = 0;
-  let failed = 0;
-  const errors: string[] = [];
-
-  for (const id of rootsToDelete) {
-    try {
-      await client.deleteGoal(id);
-      completed++;
-    } catch (e) {
-      failed++;
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  // Clean up storage links and overrides for all selected goal IDs
-  await updateSpaceData(spaceId, (d) => {
-    const deletedSet = new Set(goalIds);
-    const links = Object.fromEntries(
-      Object.entries(d.taskProjectLinks).filter(([id]) => !deletedSet.has(id)),
-    );
-    const overrides = Object.fromEntries(
-      Object.entries(d.taskColorOverrides ?? {}).filter(([id]) => !deletedSet.has(id)),
-    );
-    return { ...d, taskProjectLinks: links, taskColorOverrides: overrides };
-  });
-
-  await broadcastStateChanged();
-  return { completed, failed, errors };
-}
-
-async function smartDuplicate(goalId: string, options: DuplicateOptions): Promise<SmartDuplicateResult> {
-  const spaceId = await requireActiveSpaceId();
-  const client = await api();
   const allGoals = await client.listGoals(spaceId);
   const byId = new Map(allGoals.map((g) => [g.id, g]));
-  const rootGoal = byId.get(goalId);
-  if (!rootGoal) throw new Error(`Goal ${goalId} not found`);
 
-  // Build children map
+  // Build parents and children maps
+  const parents: Record<string, string | null> = {};
   const childrenMap = new Map<string, TSGoal[]>();
   for (const g of allGoals) {
+    parents[g.id] = g.parent_id;
     if (g.parent_id) {
       const list = childrenMap.get(g.parent_id) ?? [];
       list.push(g);
@@ -226,69 +190,216 @@ async function smartDuplicate(goalId: string, options: DuplicateOptions): Promis
     }
   }
 
-  // Calculate date offset if targetAnchorDate is specified
-  let dayOffset = 0;
-  if (options.copyDates && options.targetAnchorDate && rootGoal.date) {
-    dayOffset = computeDayOffset(rootGoal.date, options.targetAnchorDate);
-  }
+  const selectedSet = new Set(goalIds);
+  const rootsToDelete = findTopLevelRoots(goalIds, parents);
 
-  const computeDate = (origDate: string | null): string | null => {
-    if (!options.copyDates) return null;
-    if (!origDate) return null;
-    if (dayOffset !== 0) return addDays(origDate, dayOffset);
-    if (options.targetAnchorDate && !rootGoal.date) return options.targetAnchorDate;
-    return origDate;
-  };
-
-  const oldToNew = new Map<string, string>();
-  let totalCreated = 0;
-
-  // 1. Create root goal
-  const createdRoot = await client.createGoal({
-    space_id: spaceId,
-    parent_id: rootGoal.parent_id,
-    bucket_id: rootGoal.bucket_id,
-    horizon: options.copyHorizon ? rootGoal.horizon : null,
-    date: computeDate(rootGoal.date),
-    name: `${rootGoal.name} (Copy)`,
-    description: options.copyNotes ? rootGoal.description : "",
-    checked: options.copyCompletion ? rootGoal.checked : false,
-  });
-  oldToNew.set(rootGoal.id, createdRoot.id);
-  totalCreated++;
-
-  // 2. If tree scope, duplicate children recursively level by level
-  if (options.scope === "tree") {
-    const queue: Array<{ original: TSGoal; newParentId: string }> = [];
-    const directChildren = childrenMap.get(rootGoal.id) ?? [];
-    for (const child of directChildren) {
-      queue.push({ original: child, newParentId: createdRoot.id });
-    }
-
-    while (queue.length > 0) {
-      const item = queue.shift()!;
-      const orig = item.original;
-      const createdChild = await client.createGoal({
-        space_id: spaceId,
-        parent_id: item.newParentId,
-        bucket_id: orig.bucket_id,
-        horizon: options.copyHorizon ? orig.horizon : null,
-        date: computeDate(orig.date),
-        name: orig.name,
-        description: options.copyNotes ? orig.description : "",
-        checked: options.copyCompletion ? orig.checked : false,
-      });
-      oldToNew.set(orig.id, createdChild.id);
-      totalCreated++;
-
-      const nextChildren = childrenMap.get(orig.id) ?? [];
-      for (const nextChild of nextChildren) {
-        queue.push({ original: nextChild, newParentId: createdChild.id });
+  // Partial Selection Protection:
+  // If a goal to be deleted has direct children that are NOT in selectedSet,
+  // reparent those unselected children to the parent's parent (or null) before deleting!
+  // This prevents Timestripe from cascade-deleting unselected subgoals.
+  for (const rootId of rootsToDelete) {
+    const parentGoal = byId.get(rootId);
+    const directKids = childrenMap.get(rootId) ?? [];
+    for (const kid of directKids) {
+      if (!selectedSet.has(kid.id)) {
+        try {
+          await client.updateGoal(kid.id, { parent_id: parentGoal?.parent_id ?? null });
+        } catch (e) {
+          console.warn("Failed to reparent unselected child during partial selection delete:", e);
+        }
       }
     }
   }
 
-  // 3. Copy extension metadata (project links & color overrides)
+  let completed = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const confirmedDeletedIds = new Set<string>();
+
+  for (const id of rootsToDelete) {
+    try {
+      await client.deleteGoal(id);
+      completed++;
+      confirmedDeletedIds.add(id);
+
+      // Also mark all its selected descendants as confirmed deleted
+      const q = [id];
+      while (q.length > 0) {
+        const curr = q.shift()!;
+        const kids = childrenMap.get(curr) ?? [];
+        for (const kid of kids) {
+          if (selectedSet.has(kid.id)) {
+            confirmedDeletedIds.add(kid.id);
+            q.push(kid.id);
+          }
+        }
+      }
+    } catch (e) {
+      failed++;
+      errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Clean up storage links, overrides, text configs, and progress notes
+  // ONLY for goals whose deletion actually succeeded in Timestripe API
+  if (confirmedDeletedIds.size > 0) {
+    await updateSpaceData(spaceId, (d) => {
+      const links = Object.fromEntries(
+        Object.entries(d.taskProjectLinks).filter(([id]) => !confirmedDeletedIds.has(id)),
+      );
+      const overrides = Object.fromEntries(
+        Object.entries(d.taskColorOverrides ?? {}).filter(([id]) => !confirmedDeletedIds.has(id)),
+      );
+      const texts = Object.fromEntries(
+        Object.entries(d.taskTextConfigs ?? {}).filter(([id]) => !confirmedDeletedIds.has(id)),
+      );
+      const notes = Object.fromEntries(
+        Object.entries(d.taskProgressNotes ?? {}).filter(([id]) => !confirmedDeletedIds.has(id)),
+      );
+      return {
+        ...d,
+        taskProjectLinks: links,
+        taskColorOverrides: overrides,
+        taskTextConfigs: texts,
+        taskProgressNotes: notes,
+      };
+    });
+  }
+
+  await broadcastStateChanged();
+  return { completed, failed, errors };
+}
+
+async function smartDuplicate(
+  goalIdsInput: string | string[],
+  options: DuplicateOptions,
+): Promise<SmartDuplicateResult> {
+  const goalIds = Array.isArray(goalIdsInput) ? goalIdsInput : [goalIdsInput];
+  if (goalIds.length === 0) throw new Error("No goals specified for duplication");
+
+  const spaceId = await requireActiveSpaceId();
+  const client = await api();
+  const allGoals = await client.listGoals(spaceId);
+  const byId = new Map(allGoals.map((g) => [g.id, g]));
+
+  const parents: Record<string, string | null> = {};
+  const childrenMap = new Map<string, TSGoal[]>();
+  for (const g of allGoals) {
+    parents[g.id] = g.parent_id;
+    if (g.parent_id) {
+      const list = childrenMap.get(g.parent_id) ?? [];
+      list.push(g);
+      childrenMap.set(g.parent_id, list);
+    }
+  }
+
+  // If tree scope, duplicate top-level roots among selected goals to avoid duplicate subgoals
+  const rootsToDuplicate = options.scope === "tree"
+    ? findTopLevelRoots(goalIds, parents)
+    : goalIds;
+
+  const newRootIds: string[] = [];
+  const oldToNew = new Map<string, string>();
+  let totalCreated = 0;
+
+  for (const rootId of rootsToDuplicate) {
+    const rootGoal = byId.get(rootId);
+    if (!rootGoal) continue;
+
+    // Collect all goals in this subtree if tree scope, else just root
+    const treeGoals: TSGoal[] = [rootGoal];
+    if (options.scope === "tree") {
+      const q = [rootId];
+      while (q.length > 0) {
+        const pId = q.shift()!;
+        const kids = childrenMap.get(pId) ?? [];
+        for (const k of kids) {
+          treeGoals.push(k);
+          q.push(k.id);
+        }
+      }
+    }
+
+    // Fix 4: Determine baseAnchorDate
+    // 1. If rootGoal has a date, that's the base anchor.
+    // 2. If rootGoal has NO date, find the earliest date among all subgoals in this tree that have a date!
+    // 3. If no goal in the tree has a date, baseAnchorDate is null.
+    let baseAnchorDate: string | null = rootGoal.date;
+    if (!baseAnchorDate) {
+      const datesWithGoals = treeGoals.filter((g) => g.date != null).map((g) => g.date as string);
+      if (datesWithGoals.length > 0) {
+        datesWithGoals.sort();
+        baseAnchorDate = datesWithGoals[0];
+      }
+    }
+
+    let dayOffset = 0;
+    if (options.copyDates && options.targetAnchorDate && baseAnchorDate) {
+      dayOffset = computeDayOffset(baseAnchorDate, options.targetAnchorDate);
+    }
+
+    const computeDate = (origDate: string | null, isRoot: boolean): string | null => {
+      if (!options.copyDates) return null;
+      if (origDate) {
+        if (dayOffset !== 0) return addDays(origDate, dayOffset);
+        return origDate;
+      }
+      // If root had no date and no subgoals had dates, assign targetAnchorDate to root if specified
+      if (isRoot && options.targetAnchorDate && !baseAnchorDate) {
+        return options.targetAnchorDate;
+      }
+      // Unscheduled stays unscheduled
+      return null;
+    };
+
+    // 1. Create root goal
+    const createdRoot = await client.createGoal({
+      space_id: spaceId,
+      parent_id: rootGoal.parent_id,
+      bucket_id: rootGoal.bucket_id,
+      horizon: options.copyHorizon ? rootGoal.horizon : null,
+      date: computeDate(rootGoal.date, true),
+      name: `${rootGoal.name} (Copy)`,
+      description: options.copyNotes ? rootGoal.description : "",
+      checked: options.copyCompletion ? rootGoal.checked : false,
+    });
+    oldToNew.set(rootGoal.id, createdRoot.id);
+    newRootIds.push(createdRoot.id);
+    totalCreated++;
+
+    // 2. If tree scope, duplicate children recursively level by level
+    if (options.scope === "tree") {
+      const queue: Array<{ original: TSGoal; newParentId: string }> = [];
+      const directChildren = childrenMap.get(rootGoal.id) ?? [];
+      for (const child of directChildren) {
+        queue.push({ original: child, newParentId: createdRoot.id });
+      }
+
+      while (queue.length > 0) {
+        const item = queue.shift()!;
+        const orig = item.original;
+        const createdChild = await client.createGoal({
+          space_id: spaceId,
+          parent_id: item.newParentId,
+          bucket_id: orig.bucket_id,
+          horizon: options.copyHorizon ? orig.horizon : null,
+          date: computeDate(orig.date, false),
+          name: orig.name,
+          description: options.copyNotes ? orig.description : "",
+          checked: options.copyCompletion ? orig.checked : false,
+        });
+        oldToNew.set(orig.id, createdChild.id);
+        totalCreated++;
+
+        const nextChildren = childrenMap.get(orig.id) ?? [];
+        for (const nextChild of nextChildren) {
+          queue.push({ original: nextChild, newParentId: createdChild.id });
+        }
+      }
+    }
+  }
+
+  // 3. Copy extension metadata (project links, color overrides, text configs)
   if (options.copyProject || options.copyColors) {
     const spaceData = await getSpaceData(spaceId);
     await updateSpaceData(spaceId, (d) => {
@@ -309,7 +420,11 @@ async function smartDuplicate(goalId: string, options: DuplicateOptions): Promis
   }
 
   await broadcastStateChanged();
-  return { newRootId: createdRoot.id, totalCreated };
+  return {
+    newRootId: newRootIds[0] ?? "",
+    newRootIds,
+    totalCreated,
+  };
 }
 
 async function applyTemplate(templateId: string, targetAnchorDate: string): Promise<SmartDuplicateResult> {
@@ -320,26 +435,14 @@ async function applyTemplate(templateId: string, targetAnchorDate: string): Prom
   if (!template) throw new Error("Template not found");
 
   const nodes = template.nodes;
-  const rootNode = nodes.find((n) => n.parentId === null) ?? nodes[0];
-  if (!rootNode) throw new Error("Template contains no nodes");
+  if (!nodes || nodes.length === 0) throw new Error("Template contains no nodes");
 
-  const tempIdToNewId = new Map<string, string>();
-  let totalCreated = 0;
+  // Fix 3: Support Multi-root Templates
+  const rootNodes = nodes.filter((n) => n.parentId === null);
+  if (rootNodes.length === 0) {
+    rootNodes.push(nodes[0]);
+  }
 
-  // 1. Create root goal
-  const createdRoot = await client.createGoal({
-    space_id: spaceId,
-    parent_id: null,
-    horizon: rootNode.horizon,
-    date: addDays(targetAnchorDate, rootNode.dayOffset),
-    name: rootNode.name,
-    description: rootNode.description,
-    checked: false,
-  });
-  tempIdToNewId.set(rootNode.id, createdRoot.id);
-  totalCreated++;
-
-  // 2. Queue for children (breadth-first)
   const childrenMap = new Map<string, TemplateNode[]>();
   for (const node of nodes) {
     if (node.parentId) {
@@ -349,28 +452,49 @@ async function applyTemplate(templateId: string, targetAnchorDate: string): Prom
     }
   }
 
-  const queue: Array<{ node: TemplateNode; newParentId: string }> = [];
-  for (const child of childrenMap.get(rootNode.id) ?? []) {
-    queue.push({ node: child, newParentId: createdRoot.id });
-  }
+  const tempIdToNewId = new Map<string, string>();
+  const newRootIds: string[] = [];
+  let totalCreated = 0;
 
-  while (queue.length > 0) {
-    const item = queue.shift()!;
-    const n = item.node;
-    const createdChild = await client.createGoal({
+  for (const rootNode of rootNodes) {
+    // 1. Create root goal (preserve unscheduled if dayOffset is null)
+    const createdRoot = await client.createGoal({
       space_id: spaceId,
-      parent_id: item.newParentId,
-      horizon: n.horizon,
-      date: addDays(targetAnchorDate, n.dayOffset),
-      name: n.name,
-      description: n.description,
+      parent_id: null,
+      horizon: rootNode.horizon,
+      date: rootNode.dayOffset !== null ? addDays(targetAnchorDate, rootNode.dayOffset) : null,
+      name: rootNode.name,
+      description: rootNode.description,
       checked: false,
     });
-    tempIdToNewId.set(n.id, createdChild.id);
+    tempIdToNewId.set(rootNode.id, createdRoot.id);
+    newRootIds.push(createdRoot.id);
     totalCreated++;
 
-    for (const nextChild of childrenMap.get(n.id) ?? []) {
-      queue.push({ node: nextChild, newParentId: createdChild.id });
+    // 2. Queue for children (breadth-first)
+    const queue: Array<{ node: TemplateNode; newParentId: string }> = [];
+    for (const child of childrenMap.get(rootNode.id) ?? []) {
+      queue.push({ node: child, newParentId: createdRoot.id });
+    }
+
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      const n = item.node;
+      const createdChild = await client.createGoal({
+        space_id: spaceId,
+        parent_id: item.newParentId,
+        horizon: n.horizon,
+        date: n.dayOffset !== null ? addDays(targetAnchorDate, n.dayOffset) : null,
+        name: n.name,
+        description: n.description,
+        checked: false,
+      });
+      tempIdToNewId.set(n.id, createdChild.id);
+      totalCreated++;
+
+      for (const nextChild of childrenMap.get(n.id) ?? []) {
+        queue.push({ node: nextChild, newParentId: createdChild.id });
+      }
     }
   }
 
@@ -390,7 +514,7 @@ async function applyTemplate(templateId: string, targetAnchorDate: string): Prom
   });
 
   await broadcastStateChanged();
-  return { newRootId: createdRoot.id, totalCreated };
+  return { newRootId: newRootIds[0] ?? "", newRootIds, totalCreated };
 }
 
 async function requireActiveSpaceId(): Promise<string> {
@@ -439,12 +563,14 @@ async function generateCleanBackup(): Promise<BackupPayload> {
     const mergedLinks: Record<string, TaskProjectLink> = {};
     const mergedOverrides: Record<string, string> = {};
     const mergedTexts: Record<string, TaskTextConfig> = {};
+    const mergedProgressNotes: Record<string, string> = {};
     const allTemplates: GoalTemplate[] = [];
 
     for (const d of allData.values()) {
       Object.assign(mergedLinks, d.taskProjectLinks);
       Object.assign(mergedOverrides, d.taskColorOverrides);
       Object.assign(mergedTexts, d.taskTextConfigs);
+      if (d.taskProgressNotes) Object.assign(mergedProgressNotes, d.taskProgressNotes);
       if (d.templates) allTemplates.push(...d.templates);
     }
 
@@ -458,6 +584,7 @@ async function generateCleanBackup(): Promise<BackupPayload> {
         taskColorOverrides: mergedOverrides,
         templates: allTemplates,
         taskTextConfigs: mergedTexts,
+        taskProgressNotes: mergedProgressNotes,
       },
     };
   }
@@ -473,6 +600,7 @@ async function generateCleanBackup(): Promise<BackupPayload> {
     data: {
       ...spaceData,
       projects: projectsForSpace,
+      taskProgressNotes: spaceData.taskProgressNotes ?? {},
     },
   };
 }
@@ -518,7 +646,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     return bulkDeleteGoals(msg.goalIds);
   },
   SMART_DUPLICATE: async (msg) => {
-    return smartDuplicate(msg.goalId, msg.options);
+    return smartDuplicate(msg.goalIds ?? msg.goalId!, msg.options);
   },
   GET_GOAL_DETAILS: async (msg) => {
     const client = await api();
@@ -527,12 +655,26 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
   SCHEDULE_GOALS: async (msg) => {
     const client = await api();
     let updated = 0;
+    let failed = 0;
+    const results: import("../shared/messages").ScheduleGoalsResult["results"] = [];
+
     for (const item of msg.updates) {
-      await client.updateGoal(item.goalId, { date: item.date });
-      updated++;
+      try {
+        await client.updateGoal(item.goalId, { date: item.date });
+        updated++;
+        results.push({ goalId: item.goalId, success: true, date: item.date });
+      } catch (e) {
+        failed++;
+        results.push({
+          goalId: item.goalId,
+          success: false,
+          date: item.date,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
     await broadcastStateChanged();
-    return { updated };
+    return { updated, failed, results };
   },
   LIST_TEMPLATES: async () => (await getSpaceData(await requireActiveSpaceId())).templates ?? [],
   SAVE_TEMPLATE: async (msg) => {
@@ -786,8 +928,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     };
   },
   EXPORT_BACKUP: async () => {
-    const aliveGoalIds = await getAliveGoalIds();
-    await pruneOrphanedStorageData(aliveGoalIds);
+    // Pure read-only export — never mutates or prunes local storage
     return generateCleanBackup();
   },
   REFRESH_BACKUP: async () => {
@@ -803,7 +944,12 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
   },
   IMPORT_BACKUP: async (msg) => {
     const payload = msg.payload;
-    if (!payload || !payload.data) throw new Error("Invalid backup payload format");
+    if (!payload || typeof payload !== "object" || !payload.data || typeof payload.data !== "object") {
+      throw new Error("Invalid backup payload format: missing data object");
+    }
+    if (typeof payload.schemaVersion !== "number") {
+      throw new Error("Invalid backup payload format: missing or invalid schemaVersion");
+    }
 
     // Restore projects with their respective scopes
     for (const p of payload.data.projects ?? []) {
@@ -819,6 +965,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
           taskColorOverrides: payload.data.taskColorOverrides ?? {},
           templates: payload.data.templates ?? [],
           taskTextConfigs: payload.data.taskTextConfigs ?? {},
+          taskProgressNotes: payload.data.taskProgressNotes ?? {},
         };
       } else {
         const existingTplIds = new Set((current.templates ?? []).map((t) => t.id));
@@ -830,6 +977,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
           taskColorOverrides: { ...(current.taskColorOverrides ?? {}), ...(payload.data.taskColorOverrides ?? {}) },
           templates: [...(current.templates ?? []), ...newTemplates],
           taskTextConfigs: { ...(current.taskTextConfigs ?? {}), ...(payload.data.taskTextConfigs ?? {}) },
+          taskProgressNotes: { ...(current.taskProgressNotes ?? {}), ...(payload.data.taskProgressNotes ?? {}) },
         };
       }
     });

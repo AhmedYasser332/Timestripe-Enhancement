@@ -26,7 +26,7 @@ import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import { pushAction } from "./history";
 import { toggleGoalWithTree } from "./selection-state";
 import { openProgressPopover } from "./progress-popover";
-import type { TaskTextConfig } from "../shared/types";
+import { NO_PROJECT_ID, type TaskTextConfig } from "../shared/types";
 
 const MENU_SIGNATURE = ["Duplicate", "Delete"];
 const SECTION_CLASS = "tse-menu-section";
@@ -247,9 +247,15 @@ function closeNativeMenu(): void {
 async function assign(goalId: string, projectId: string | null, projectName: string | undefined): Promise<void> {
   const prevProjectId = currentProjectId(goalId);
 
+  const desc = projectName
+    ? `Assign to ${projectName}`
+    : projectId === NO_PROJECT_ID
+      ? "Set to No Project"
+      : "Inherit project from parent";
+
   pushAction({
     id: crypto.randomUUID(),
-    description: projectName ? `Assign to ${projectName}` : "Remove project",
+    description: desc,
     undo: async () => {
       optimisticAssign(goalId, prevProjectId);
       await sendToBg({ type: "ASSIGN_PROJECTS", goalIds: [goalId], projectId: prevProjectId });
@@ -266,8 +272,10 @@ async function assign(goalId: string, projectId: string | null, projectName: str
 
   if (projectName) {
     showToast(`Assigned to ${projectName}`, projectColorById(projectId));
+  } else if (projectId === NO_PROJECT_ID) {
+    showToast("Set to No Project (overrides parent)");
   } else {
-    showToast("Project removed");
+    showToast("Reset to inherit from parent");
   }
 
   // 2. Persist in background via service worker
@@ -532,7 +540,8 @@ function openFlyout(goalId: string, anchorRow: HTMLElement, parentMenu: Element)
     projects,
     currentProjectId: current,
     onPick: assignTo,
-    onRemove: current ? () => assignTo(null) : undefined,
+    onRemove: () => assign(goalId, NO_PROJECT_ID, undefined),
+    onInherit: () => assign(goalId, null, undefined),
     onBrowseAll: () => {
       closeFlyouts();
       openProjectTreeModal({
@@ -540,7 +549,8 @@ function openFlyout(goalId: string, anchorRow: HTMLElement, parentMenu: Element)
         title: "Assign to project",
         subtitle: "Click any project to assign it to this task.",
         onPick: assignTo,
-        onRemove: current ? () => assignTo(null) : undefined,
+        onRemove: () => assign(goalId, NO_PROJECT_ID, undefined),
+        onInherit: () => assign(goalId, null, undefined),
       });
     },
   });

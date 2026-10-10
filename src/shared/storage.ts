@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeSpaceId: null,
   colorMode: "strip",
   showProjectName: true,
-  autoCompleteParent: true,
+  autoCompleteParent: false,
 };
 
 const DEFAULT_SPACE_DATA: SpaceData = {

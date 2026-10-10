@@ -39,6 +39,9 @@ export interface Project {
   parentId?: string | null;
 }
 
+/** Sentinel value for explicitly removing project and breaking parent inheritance. */
+export const NO_PROJECT_ID = "__none__";
+
 /** PRD §40 — only explicit links are stored; inherited ones are computed (PRD §7.4). */
 export type TaskProjectLink = { projectId: string };
 
@@ -48,7 +51,7 @@ export interface TemplateNode {
   name: string;
   description: string;
   horizon: TSHorizon | null;
-  dayOffset: number; // offset in days from anchor
+  dayOffset: number | null; // offset in days from anchor (null if unscheduled)
   projectId?: string | null;
   colorOverride?: string | null;
 }

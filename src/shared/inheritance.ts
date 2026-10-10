@@ -1,6 +1,6 @@
 /** Project inheritance resolution (PRD §7): explicit links win, otherwise walk up the parent chain. */
 
-import type { AssignmentSource } from "./types";
+import { NO_PROJECT_ID, type AssignmentSource } from "./types";
 
 export interface ResolvedAssignment {
   projectId: string;
@@ -27,11 +27,18 @@ export function resolveAssignments(
     let out: ResolvedAssignment | null = null;
     const link = links[id];
     if (link) {
-      out = { projectId: link.projectId, source: "explicit" };
+      if (link.projectId === NO_PROJECT_ID || !link.projectId) {
+        // Explicit "No Project" state: stops inheritance and assigns no project
+        out = { projectId: "", source: "explicit" };
+      } else {
+        out = { projectId: link.projectId, source: "explicit" };
+      }
     } else {
       const parent = parents[id];
       const parentRes = parent ? resolve(parent) : null;
-      if (parentRes) out = { projectId: parentRes.projectId, source: "inherited" };
+      if (parentRes && parentRes.projectId) {
+        out = { projectId: parentRes.projectId, source: "inherited" };
+      }
     }
     visiting.delete(id);
     cache.set(id, out);
@@ -41,7 +48,9 @@ export function resolveAssignments(
   const result: Record<string, ResolvedAssignment> = {};
   for (const id of new Set([...Object.keys(parents), ...Object.keys(links)])) {
     const res = resolve(id);
-    if (res) result[id] = res;
+    if (res && res.projectId && res.projectId !== NO_PROJECT_ID) {
+      result[id] = res;
+    }
   }
   return result;
 }

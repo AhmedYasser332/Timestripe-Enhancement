@@ -165,16 +165,21 @@ function injectModalStyles(): void {
   document.head.appendChild(style);
 }
 
-export async function openDuplicateModal(goalId: string, initialGoalName = "Goal"): Promise<void> {
+export async function openDuplicateModal(target: string | string[], initialGoalName = "Goal"): Promise<void> {
   closeDuplicateModal();
   injectModalStyles();
 
+  const goalIds = Array.isArray(target) ? target : [target];
+  if (goalIds.length === 0) return;
+  const isMulti = goalIds.length > 1;
+  const primaryGoalId = goalIds[0];
+
   // Fetch goal details to check date
   let originalDate: string | null = null;
-  const detailsRes = await sendToBg<TSGoal>({ type: "GET_GOAL_DETAILS", goalId });
+  const detailsRes = await sendToBg<TSGoal>({ type: "GET_GOAL_DETAILS", goalId: primaryGoalId });
   if (detailsRes?.ok && detailsRes.data) {
     originalDate = detailsRes.data.date;
-    if (detailsRes.data.name) initialGoalName = detailsRes.data.name;
+    if (detailsRes.data.name && !isMulti) initialGoalName = detailsRes.data.name;
   }
 
   const backdrop = document.createElement("div");
@@ -188,7 +193,9 @@ export async function openDuplicateModal(goalId: string, initialGoalName = "Goal
   const header = document.createElement("div");
   header.className = "tse-modal-title";
   const titleText = document.createElement("span");
-  titleText.textContent = `Smart Duplicate: ${initialGoalName.slice(0, 24)}${initialGoalName.length > 24 ? "…" : ""}`;
+  titleText.textContent = isMulti
+    ? `Bulk Duplicate: ${goalIds.length} tasks`
+    : `Smart Duplicate: ${initialGoalName.slice(0, 24)}${initialGoalName.length > 24 ? "…" : ""}`;
   titleText.dir = "auto";
   const closeBtn = document.createElement("button");
   closeBtn.className = "tse-modal-close-btn";
@@ -212,7 +219,14 @@ export async function openDuplicateModal(goalId: string, initialGoalName = "Goal
 
   const labelTree = document.createElement("label");
   labelTree.className = "tse-radio-item";
-  labelTree.append(radioTree, document.createTextNode("Main goal with all subgoals (recursive tree)"));
+  labelTree.append(
+    radioTree,
+    document.createTextNode(
+      isMulti
+        ? "Selected goals with all subgoals (recursive tree)"
+        : "Main goal with all subgoals (recursive tree)",
+    ),
+  );
 
   const radioMain = document.createElement("input");
   radioMain.type = "radio";
@@ -221,7 +235,10 @@ export async function openDuplicateModal(goalId: string, initialGoalName = "Goal
 
   const labelMain = document.createElement("label");
   labelMain.className = "tse-radio-item";
-  labelMain.append(radioMain, document.createTextNode("Main goal only"));
+  labelMain.append(
+    radioMain,
+    document.createTextNode(isMulti ? "Selected goals only (no subgoals)" : "Main goal only"),
+  );
 
   scopeGroup.append(labelTree, labelMain);
   scopeSection.append(scopeLabel, scopeGroup);
@@ -275,7 +292,7 @@ export async function openDuplicateModal(goalId: string, initialGoalName = "Goal
   dateHint.className = "tse-date-hint";
   dateHint.textContent = originalDate
     ? `Original starts on ${originalDate}. Picking a new date will shift subgoals preserving exact relative offsets.`
-    : "No date set on original. Set a target date to schedule this copy.";
+    : "No date set on root. Set a target date to schedule; any subgoals with dates will shift preserving exact relative offsets.";
 
   dateSection.append(dateLabel, dateInput, dateHint);
 
@@ -315,30 +332,31 @@ export async function openDuplicateModal(goalId: string, initialGoalName = "Goal
     try {
       const res = await sendToBg<SmartDuplicateResult>({
         type: "SMART_DUPLICATE",
-        goalId,
+        goalIds,
         options,
       });
 
       if (res?.ok) {
-        const createdRootId = res.data.newRootId;
+        const createdRootIds = res.data.newRootIds ?? [res.data.newRootId];
+        const taskLabel = isMulti ? `${goalIds.length} tasks` : initialGoalName;
         showToast(`Duplicated ${res.data.totalCreated} goal${res.data.totalCreated > 1 ? "s" : ""}`);
         closeDuplicateModal();
 
         pushAction({
           id: crypto.randomUUID(),
-          description: `Duplicate: ${initialGoalName}`,
+          description: `Duplicate: ${taskLabel}`,
           undo: async () => {
-            await sendToBg({ type: "BULK_DELETE_GOALS", goalIds: [createdRootId] });
-            showToast(`Undid duplicate of ${initialGoalName}`);
+            await sendToBg({ type: "BULK_DELETE_GOALS", goalIds: createdRootIds });
+            showToast(`Undid duplicate of ${taskLabel}`);
           },
           redo: async () => {
             const reRes = await sendToBg<SmartDuplicateResult>({
               type: "SMART_DUPLICATE",
-              goalId,
+              goalIds,
               options,
             });
             if (reRes?.ok) {
-              showToast(`Redid duplicate of ${initialGoalName}`);
+              showToast(`Redid duplicate of ${taskLabel}`);
             }
           },
         });

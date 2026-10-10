@@ -82,4 +82,34 @@ describe("Inheritance Resolution Engine (PRD §7)", () => {
     const resolved = resolveAssignments(parents, links);
     expect(resolved.unassigned).toBeUndefined();
   });
+
+  it("explicit 'No Project' (__none__) prevents inheritance from parent", () => {
+    const parents = {
+      parent: null,
+      child: "parent",
+    };
+    const links = {
+      parent: { projectId: "p-quran" },
+      child: { projectId: "__none__" },
+    };
+
+    const resolved = resolveAssignments(parents, links);
+    expect(resolved.parent).toEqual({ projectId: "p-quran", source: "explicit" });
+    // child explicitly chose "No project", so it must NOT inherit "p-quran"
+    expect(resolved.child).toBeUndefined();
+  });
+
+  it("removing explicit link allows child to inherit from parent again", () => {
+    const parents = {
+      parent: null,
+      child: "parent",
+    };
+    // child has no link entry
+    const links = {
+      parent: { projectId: "p-quran" },
+    };
+
+    const resolved = resolveAssignments(parents, links);
+    expect(resolved.child).toEqual({ projectId: "p-quran", source: "inherited" });
+  });
 });

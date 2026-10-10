@@ -283,14 +283,14 @@ export async function openTemplatesModal(initialTab: "apply" | "save" = "apply")
 
       try {
         const targetAnchorDate = dateInput.value || new Date().toISOString().split("T")[0];
-        const resApply = await sendToBg<{ newRootId: string; totalCreated: number }>({
+        const resApply = await sendToBg<import("../shared/messages").SmartDuplicateResult>({
           type: "APPLY_TEMPLATE",
           templateId: selectedTemplateId,
           targetAnchorDate,
         });
 
         if (resApply?.ok) {
-          const createdRootId = resApply.data.newRootId;
+          const createdRootIds = resApply.data.newRootIds ?? [resApply.data.newRootId];
           const totalCreated = resApply.data.totalCreated;
           showToast(`Applied template (${totalCreated} goals created)`);
           closeTemplatesModal();
@@ -300,7 +300,7 @@ export async function openTemplatesModal(initialTab: "apply" | "save" = "apply")
             id: crypto.randomUUID(),
             description: "Apply Template",
             undo: async () => {
-              await sendToBg({ type: "BULK_DELETE_GOALS", goalIds: [createdRootId] });
+              await sendToBg({ type: "BULK_DELETE_GOALS", goalIds: createdRootIds });
               showToast("Undid Apply Template (removed created tasks)");
             },
             redo: async () => {
@@ -416,7 +416,7 @@ export async function openTemplatesModal(initialTab: "apply" | "save" = "apply")
       // 2. Build template nodes
       const nodes: TemplateNode[] = [];
       for (const [id, goal] of goalsMap.entries()) {
-        const offset = goal.date ? computeDayOffset(rootAnchorDate, goal.date) : 0;
+        const offset = goal.date ? computeDayOffset(rootAnchorDate, goal.date) : null;
         const parentId = goal.parent_id && goalsMap.has(goal.parent_id) ? goal.parent_id : null;
 
         nodes.push({

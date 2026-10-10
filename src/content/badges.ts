@@ -98,17 +98,14 @@ export function injectStyles(): void {
       vertical-align: middle;
       position: relative;
 
-      background: rgba(24, 24, 27, 0.88);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.11);
-      border-top-color: rgba(255, 255, 255, 0.22);
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.14),
-        0 2px 4px rgba(0, 0, 0, 0.35);
+      background: rgba(24, 24, 27, 0.85);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
     .${CHIP_CLASS}:hover {
       border-color: rgba(255, 255, 255, 0.35) !important;

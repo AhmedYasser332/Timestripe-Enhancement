@@ -184,6 +184,7 @@ export interface ProjectPickContext {
   currentProjectId?: string | null;
   onPick: (project: Project) => void;
   onRemove?: () => void;
+  onInherit?: () => void;
   onBrowseAll: () => void;
 }
 
@@ -306,17 +307,30 @@ export function fillProjectFlyout(root: HTMLElement, ctx: ProjectPickContext): (
   });
   root.appendChild(browseRow);
 
-  if (ctx.currentProjectId && ctx.onRemove) {
+  if (ctx.onRemove) {
     const removeRow = document.createElement("button");
     removeRow.type = "button";
     removeRow.className = "tse-menu-row";
-    removeRow.textContent = "Remove project";
+    removeRow.textContent = "✕ No project (override)";
     removeRow.addEventListener("click", (e) => {
       e.stopPropagation();
       destroy();
       ctx.onRemove?.();
     });
     root.appendChild(removeRow);
+  }
+
+  if (ctx.onInherit) {
+    const inheritRow = document.createElement("button");
+    inheritRow.type = "button";
+    inheritRow.className = "tse-menu-row";
+    inheritRow.textContent = "↳ Inherit from parent";
+    inheritRow.addEventListener("click", (e) => {
+      e.stopPropagation();
+      destroy();
+      ctx.onInherit?.();
+    });
+    root.appendChild(inheritRow);
   }
 
   const destroy = (): void => {
@@ -343,6 +357,7 @@ export interface TreeModalOptions {
   subtitle?: string;
   onPick: (project: Project | null) => void;
   onRemove?: () => void;
+  onInherit?: () => void;
   /** Move mode: offer a "Top level" row that calls onPick(null). */
   allowTopLevel?: boolean;
   /** Move mode: highlighted current parent. */
@@ -469,12 +484,25 @@ export function openProjectTreeModal(opts: TreeModalOptions): void {
     removeRow.type = "button";
     removeRow.className = "tse-tree-row";
     removeRow.style.color = "#f87171";
-    removeRow.textContent = "✕ Remove project";
+    removeRow.textContent = "✕ No project (override)";
     removeRow.addEventListener("click", () => {
       close();
       opts.onRemove?.();
     });
     list.appendChild(removeRow);
+  }
+
+  if (opts.onInherit) {
+    const inheritRow = document.createElement("button");
+    inheritRow.type = "button";
+    inheritRow.className = "tse-tree-row";
+    inheritRow.style.color = "#93c5fd";
+    inheritRow.textContent = "↳ Inherit from parent";
+    inheritRow.addEventListener("click", () => {
+      close();
+      opts.onInherit?.();
+    });
+    list.appendChild(inheritRow);
   }
 
   box.appendChild(list);

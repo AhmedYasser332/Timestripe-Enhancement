@@ -10,6 +10,7 @@
 
 import { addDays, addMonths, addYears, formatShortDate, isoWeekNumber, weekStart } from "../shared/dates";
 import type { TSGoal } from "../shared/types";
+import type { ScheduleGoalsResult } from "../shared/messages";
 import { pushAction } from "./history";
 import { sendToBg } from "./messaging";
 import { showToast } from "./toast";
@@ -713,6 +714,7 @@ export async function openSchedulerModal(selectedGoalIds: string[]): Promise<voi
   for (const [id, goal] of goalsMap.entries()) {
     const tr = document.createElement("tr");
     tr.className = "tse-sched-row";
+    tr.setAttribute("data-goal-id", id);
 
     const tdName = document.createElement("td");
     tdName.textContent = goal.name || "(Unnamed task)";
@@ -784,32 +786,55 @@ export async function openSchedulerModal(selectedGoalIds: string[]): Promise<voi
     }
 
     try {
-      const res = await sendToBg<{ updated: number }>({
+      const res = await sendToBg<ScheduleGoalsResult>({
         type: "SCHEDULE_GOALS",
         updates,
       });
 
       if (res?.ok) {
-        showToast(`Scheduled ${res.data.updated} goals`);
-        closeSchedulerModal();
+        const { updated, failed, results } = res.data;
+        if (failed === 0) {
+          showToast(`Scheduled ${updated} goals`);
+          closeSchedulerModal();
+        } else {
+          showToast(`Scheduled ${updated} goals. ${failed} failed.`);
+          const failedIds = new Set(results.filter((r) => !r.success).map((r) => r.goalId));
+          table.querySelectorAll("tr[data-goal-id]").forEach((tr) => {
+            const gId = tr.getAttribute("data-goal-id");
+            if (gId && failedIds.has(gId)) {
+              (tr as HTMLElement).style.outline = "1px solid #ef4444";
+              (tr as HTMLElement).style.background = "rgba(239, 68, 68, 0.1)";
+            } else if (gId) {
+              (tr as HTMLElement).style.outline = "";
+              (tr as HTMLElement).style.background = "";
+            }
+          });
+          saveBtn.disabled = false;
+          saveBtn.textContent = `Retry Failed (${failed})`;
+        }
 
-        // Push to History Stack for Ctrl+Z Undo
-        pushAction({
-          id: crypto.randomUUID(),
-          description: `Fast Schedule: ${updates.length} tasks`,
-          undo: async () => {
-            const revertUpdates = Array.from(originalDates.entries()).map(([goalId, date]) => ({
-              goalId,
-              date,
-            }));
-            await sendToBg({ type: "SCHEDULE_GOALS", updates: revertUpdates });
-            showToast("Undid Fast Schedule (dates restored)");
-          },
-          redo: async () => {
-            await sendToBg({ type: "SCHEDULE_GOALS", updates });
-            showToast("Redid Fast Schedule");
-          },
-        });
+        // Push to History Stack for Ctrl+Z Undo ONLY for goals that succeeded
+        const succeededIds = new Set(results.filter((r) => r.success).map((r) => r.goalId));
+        if (succeededIds.size > 0) {
+          const revertUpdates = Array.from(originalDates.entries())
+            .filter(([goalId]) => succeededIds.has(goalId))
+            .map(([goalId, date]) => ({ goalId, date }));
+
+          const redoUpdates = updates.filter((u) => succeededIds.has(u.goalId));
+
+          pushAction({
+            id: crypto.randomUUID(),
+            description: `Fast Schedule: ${succeededIds.size} tasks`,
+            undo: async () => {
+              await sendToBg({ type: "SCHEDULE_GOALS", updates: revertUpdates });
+              showToast("Undid Fast Schedule (dates restored)");
+            },
+            redo: async () => {
+              await sendToBg({ type: "SCHEDULE_GOALS", updates: redoUpdates });
+              showToast("Redid Fast Schedule");
+            },
+          });
+        }
       } else {
         showToast(`Scheduling failed: ${res?.error ?? "Unknown error"}`);
         saveBtn.disabled = false;

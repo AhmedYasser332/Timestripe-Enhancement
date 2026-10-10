@@ -37,7 +37,7 @@ import { pushAction } from "./history";
 import { showToast } from "./toast";
 import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import type { BulkDeleteResult } from "../shared/messages";
-import type { TaskTextConfig } from "../shared/types";
+import { NO_PROJECT_ID, type TaskTextConfig } from "../shared/types";
 
 const CHECKBOX_CLASS = "tse-select-btn";
 const BAR_ID = "tse-selection-bar";
@@ -146,14 +146,14 @@ function injectSelectionStyles(): void {
       transform: scale(1.06);
     }
     .${CHECKBOX_CLASS}[data-tse-state="checked"] {
-      background: #7c5cff !important;
-      border-color: #7c5cff !important;
-      box-shadow: 0 0 8px rgba(124, 92, 255, 0.45);
+      background: #6366f1 !important;
+      border-color: #6366f1 !important;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .${CHECKBOX_CLASS}[data-tse-state="partial"] {
-      background: #7c5cff !important;
-      border-color: #7c5cff !important;
-      box-shadow: 0 0 8px rgba(124, 92, 255, 0.45);
+      background: #6366f1 !important;
+      border-color: #6366f1 !important;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .${CHECKBOX_CLASS} svg {
       width: 10.5px;
@@ -204,11 +204,11 @@ function injectSelectionStyles(): void {
       background: rgba(255, 255, 255, 0.15);
     }
     .${PARTIAL_POPUP_CLASS} .tse-popup-btn.primary {
-      background: #7c5cff;
+      background: #6366f1;
       font-weight: 500;
     }
     .${PARTIAL_POPUP_CLASS} .tse-popup-btn.primary:hover {
-      background: #6a46f7;
+      background: #4f46e5;
     }
 
     /* Floating Selection Manager Bar (PRD §12) - Rock solid, no vibration */
@@ -241,7 +241,7 @@ function injectSelectionStyles(): void {
       border-inline-end: 1px solid rgba(255, 255, 255, 0.12);
     }
     .tse-bar-badge {
-      background: #7c5cff;
+      background: #6366f1;
       color: #ffffff;
       padding: 1.5px 7px;
       border-radius: 999px;
@@ -604,7 +604,7 @@ export function reconcileSelectionBar(): void {
     e.stopPropagation();
     const ids = getSelectedIds();
     if (ids.length > 0) {
-      void openDuplicateModal(ids[0]);
+      void openDuplicateModal(ids);
     }
   };
   actions.appendChild(dupBtn);
@@ -661,19 +661,25 @@ function openBulkProjectFlyout(anchorBtn: HTMLElement): void {
     prevProjects[id] = assignments[id]?.source === "explicit" ? assignments[id].projectId : null;
   }
 
-  const assignBulk = async (project: { id: string; name: string } | null): Promise<void> => {
+  const assignBulk = async (target: { id: string; name: string } | string | null): Promise<void> => {
     closeBarFlyout();
-    for (const id of selectedGoalIds) optimisticAssign(id, project ? project.id : null);
-    showToast(
-      project
-        ? `Assigned ${selectedGoalIds.length} tasks to ${project.name}`
-        : `Removed project from ${selectedGoalIds.length} tasks`,
-    );
+    const projectId = typeof target === "string" ? target : (target ? target.id : null);
+    for (const id of selectedGoalIds) optimisticAssign(id, projectId);
 
-    const projectId = project ? project.id : null;
-    const description = project
-      ? `Assign ${selectedGoalIds.length} tasks to ${project.name}`
-      : `Remove project from ${selectedGoalIds.length} tasks`;
+    const toastMsg =
+      typeof target === "string" && target === NO_PROJECT_ID
+        ? `Set to No Project (overrides parent) on ${selectedGoalIds.length} tasks`
+        : target && typeof target === "object"
+          ? `Assigned ${selectedGoalIds.length} tasks to ${target.name}`
+          : `Reset to inherit from parent on ${selectedGoalIds.length} tasks`;
+    showToast(toastMsg);
+
+    const description =
+      typeof target === "string" && target === NO_PROJECT_ID
+        ? `Set to No Project on ${selectedGoalIds.length} tasks`
+        : target && typeof target === "object"
+          ? `Assign ${selectedGoalIds.length} tasks to ${target.name}`
+          : `Inherit project from parent on ${selectedGoalIds.length} tasks`;
 
     pushAction({
       id: crypto.randomUUID(),
@@ -697,6 +703,8 @@ function openBulkProjectFlyout(anchorBtn: HTMLElement): void {
   const destroy = fillProjectFlyout(flyout, {
     projects,
     onPick: assignBulk,
+    onRemove: () => assignBulk(NO_PROJECT_ID),
+    onInherit: () => assignBulk(null),
     onBrowseAll: () => {
       closeBarFlyout();
       openProjectTreeModal({
@@ -704,7 +712,8 @@ function openBulkProjectFlyout(anchorBtn: HTMLElement): void {
         title: "Assign to project",
         subtitle: `Click any project to assign ${selectedGoalIds.length} selected tasks.`,
         onPick: assignBulk,
-        onRemove: () => assignBulk(null),
+        onRemove: () => assignBulk(NO_PROJECT_ID),
+        onInherit: () => assignBulk(null),
       });
     },
   });
