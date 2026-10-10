@@ -108,17 +108,11 @@ export function injectStyles(): void {
         0 2px 4px rgba(0, 0, 0, 0.35);
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
-      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease, border-color 0.15s ease;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .${CHIP_CLASS}:hover {
-      flex-shrink: 0 !important;
-      width: max-content !important;
-      max-width: 250px !important;
-      overflow: visible !important;
-      z-index: 10000 !important;
-      background: #18181b !important;
-      border-color: rgba(255, 255, 255, 0.4) !important;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+      border-color: rgba(255, 255, 255, 0.35) !important;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6) !important;
     }
     .${CHIP_CLASS} .tse-chip-label {
       overflow: hidden;
@@ -128,11 +122,6 @@ export function injectStyles(): void {
       max-width: 100%;
       padding-inline-end: 2px;
     }
-    .${CHIP_CLASS}:hover .tse-chip-label {
-      overflow: visible !important;
-      text-overflow: clip !important;
-      max-width: none !important;
-    }
     .tse-chip-dot {
       width: 6px;
       height: 6px;
@@ -140,6 +129,26 @@ export function injectStyles(): void {
       flex-shrink: 0;
       background: rgb(var(--tse-color));
       box-shadow: 0 0 5px rgb(var(--tse-color) / 0.7);
+    }
+
+    /* Floating Expanded Pill on Body (zero layout shift, 0.00% jitter) */
+    .tse-float-pill {
+      position: fixed;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2.5px 9px 2.5px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #f4f4f5;
+      background: #18181b;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 2147483647;
+      animation: tseFadeIn 0.08s ease-out;
     }
 
     /* Task Progress / Remaining Badge */
@@ -211,6 +220,81 @@ export function injectStyles(): void {
     }
   `;
   document.head.appendChild(style);
+  initFloatPillListeners();
+}
+
+let floatPillListenersInitialized = false;
+
+function initFloatPillListeners(): void {
+  if (floatPillListenersInitialized) return;
+  floatPillListenersInitialized = true;
+
+  let activeFloatPill: HTMLElement | null = null;
+  let currentHoveredChip: HTMLElement | null = null;
+
+  function removeFloatPill(): void {
+    if (activeFloatPill) {
+      activeFloatPill.remove();
+      activeFloatPill = null;
+    }
+    currentHoveredChip = null;
+  }
+
+  document.addEventListener(
+    "mouseover",
+    (e) => {
+      const target = e.target as HTMLElement | null;
+      const chip = target?.closest<HTMLElement>(`.${CHIP_CLASS}`);
+      if (!chip) {
+        if (activeFloatPill) removeFloatPill();
+        return;
+      }
+      if (chip === currentHoveredChip) return;
+      currentHoveredChip = chip;
+
+      const fullName = chip.getAttribute("data-full-name") || chip.textContent?.trim() || "";
+      if (!fullName) return;
+
+      removeFloatPill();
+
+      const rect = chip.getBoundingClientRect();
+      const dotColor = chip.getAttribute("data-color") || "#888";
+
+      const pill = document.createElement("div");
+      pill.className = "tse-float-pill";
+      const dot = document.createElement("span");
+      dot.className = "tse-chip-dot";
+      dot.style.background = dotColor;
+      dot.style.boxShadow = `0 0 5px ${dotColor}`;
+      const label = document.createElement("span");
+      label.textContent = fullName;
+      pill.append(dot, label);
+      document.body.appendChild(pill);
+      activeFloatPill = pill;
+
+      const pillRect = pill.getBoundingClientRect();
+      pill.style.top = `${rect.top}px`;
+      pill.style.left = `${Math.max(8, rect.right - pillRect.width)}px`;
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "mouseout",
+    (e) => {
+      const target = e.target as HTMLElement | null;
+      const chip = target?.closest<HTMLElement>(`.${CHIP_CLASS}`);
+      if (chip && chip === currentHoveredChip) {
+        const related = (e as MouseEvent).relatedTarget as HTMLElement | null;
+        if (related && chip.contains(related)) return;
+        removeFloatPill();
+      }
+    },
+    true,
+  );
+
+  window.addEventListener("scroll", removeFloatPill, { passive: true, capture: true });
+  window.addEventListener("resize", removeFloatPill, { passive: true });
 }
 
 function signature(
@@ -329,6 +413,7 @@ export function applyBadge(
     chip.className = CHIP_CLASS;
     chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
     chip.setAttribute("data-full-name", info.path ?? info.name);
+    chip.setAttribute("data-color", info.color);
     const dot = document.createElement("span");
     dot.className = "tse-chip-dot";
     const label = document.createElement("span");
