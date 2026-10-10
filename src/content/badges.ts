@@ -143,9 +143,12 @@ export function injectStyles(): void {
       border: 1px solid rgba(255, 255, 255, 0.35);
       box-shadow: 0 4px 18px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.22);
       white-space: nowrap;
-      pointer-events: none;
+      pointer-events: none !important;
       z-index: 2147483647;
-      animation: tseFadeIn 0.08s ease-out;
+      user-select: none;
+    }
+    .tse-float-pill * {
+      pointer-events: none !important;
     }
 
     /* Task Progress / Remaining Badge */
@@ -251,6 +254,15 @@ function initFloatPillListeners(): void {
 
       const fullName = chip.getAttribute("data-full-name") || chip.textContent?.trim() || "";
       if (!fullName) return;
+
+      // Only mount float pill if the chip label is actually truncated/shortened
+      const labelEl = chip.querySelector<HTMLElement>(".tse-chip-label");
+      const isTruncated = labelEl ? labelEl.scrollWidth > labelEl.clientWidth + 1 : false;
+      const isDifferent = Boolean(labelEl && fullName.trim() !== labelEl.textContent?.trim());
+      if (!isTruncated && !isDifferent) {
+        if (activeFloatPill) removeFloatPill();
+        return;
+      }
 
       removeFloatPill();
 
@@ -408,7 +420,6 @@ export function applyBadge(
   if (settings.showProjectName && info.name && content) {
     const chip = document.createElement("span");
     chip.className = CHIP_CLASS;
-    chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
     chip.setAttribute("data-full-name", info.path ?? info.name);
     chip.setAttribute("data-color", info.color);
     const dot = document.createElement("span");

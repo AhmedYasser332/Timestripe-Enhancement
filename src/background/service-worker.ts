@@ -524,7 +524,18 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       }
     }
 
-    const target = byId.get(msg.goalId);
+    let target = byId.get(msg.goalId);
+    if (!target) {
+      try {
+        const fetched = await client.getGoal(msg.goalId);
+        if (fetched) {
+          target = fetched;
+          byId.set(fetched.id, fetched);
+        }
+      } catch {
+        // ignore
+      }
+    }
     if (!target || !target.parent_id) {
       return { parentIdsToCheck: [], parentIdsToUncheck: [] };
     }
@@ -556,7 +567,18 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
 
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
-        const parent = byId.get(currParentId);
+        let parent = byId.get(currParentId);
+        if (!parent) {
+          try {
+            const fetched = await client.getGoal(currParentId);
+            if (fetched) {
+              parent = fetched;
+              byId.set(fetched.id, fetched);
+            }
+          } catch {
+            break;
+          }
+        }
         if (!parent) break;
 
         const subgoals = childrenByParent.get(currParentId) ?? [];
@@ -589,7 +611,18 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       // =======================================================================
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
-        const parent = byId.get(currParentId);
+        let parent = byId.get(currParentId);
+        if (!parent) {
+          try {
+            const fetched = await client.getGoal(currParentId);
+            if (fetched) {
+              parent = fetched;
+              byId.set(fetched.id, fetched);
+            }
+          } catch {
+            break;
+          }
+        }
         if (!parent) break;
 
         if (parent.checked) {
@@ -603,6 +636,10 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         }
         currParentId = parent.parent_id;
       }
+    }
+
+    if (parentIdsToCheck.length > 0 || parentIdsToUncheck.length > 0) {
+      await broadcastStateChanged();
     }
 
     return { parentIdsToCheck, parentIdsToUncheck };

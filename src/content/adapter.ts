@@ -20,7 +20,7 @@ export function goalIdFromWrapper(wrapper: HTMLElement): string | null {
 }
 
 /** Detect parent goal ID directly from DOM structure if nested or linked. */
-function detectDomParent(wrapper: HTMLElement, goalId: string): string | null {
+export function detectDomParent(wrapper: HTMLElement, goalId: string): string | null {
   // 1. Nested inside another GoalRowWrapper (subgoal hierarchy)
   const parentWrapper = wrapper.parentElement?.closest<HTMLElement>(".GoalRowWrapper");
   if (parentWrapper) {
@@ -96,8 +96,10 @@ export function getNativeGoalCheckbox(wrapperOrRow: HTMLElement): HTMLElement | 
 export function isGoalChecked(wrapperOrRow: HTMLElement): boolean {
   const cb = getNativeGoalCheckbox(wrapperOrRow);
   if (cb) {
-    if (cb.getAttribute("aria-checked") === "true") return true;
-    if (cb instanceof HTMLInputElement && cb.checked) return true;
+    const aria = cb.getAttribute("aria-checked");
+    if (aria === "true") return true;
+    if (aria === "false") return false;
+    if (cb instanceof HTMLInputElement) return cb.checked;
     if (
       cb.classList.contains("checked") ||
       cb.classList.contains("is-checked") ||

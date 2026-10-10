@@ -8,6 +8,7 @@
  */
 
 import {
+  detectDomParent,
   getNativeGoalCheckbox,
   goalIdFromWrapper,
   isGoalChecked,
@@ -292,6 +293,19 @@ function parseSubgoalCountFromDom(parentWrapper: HTMLElement): number | null {
   return null;
 }
 
+/** Find all wrappers on screen matching a given goal ID (case-insensitive & cross-horizon). */
+function findWrappersForGoal(goalId: string): HTMLElement[] {
+  const targetId = goalId.toLowerCase();
+  const wrappers: HTMLElement[] = [];
+  document.querySelectorAll<HTMLElement>(".GoalRowWrapper").forEach((w) => {
+    const gid = goalIdFromWrapper(w);
+    if (gid && gid.toLowerCase() === targetId) {
+      wrappers.push(w);
+    }
+  });
+  return wrappers;
+}
+
 /** Check DOM ancestors recursively (Day -> Week -> Month -> Quarter -> Year -> Decade -> Life). */
 function checkDomCascade(goalId: string): void {
   const rows = scanGoalRows();
@@ -299,14 +313,26 @@ function checkDomCascade(goalId: string): void {
 
   while (currGoalId) {
     const childHandle = rows.get(currGoalId);
-    const parentId = childHandle?.domParentId || getGoalParents()[currGoalId];
+    let parentId = childHandle?.domParentId || getGoalParents()[currGoalId];
+    if (!parentId) {
+      // Check if any other wrapper of this goal on screen is nested under a parent
+      for (const w of findWrappersForGoal(currGoalId)) {
+        const detected = detectDomParent(w, currGoalId);
+        if (detected) {
+          parentId = detected;
+          break;
+        }
+      }
+    }
     if (!parentId) break;
 
     const parentHandle = rows.get(parentId);
-    if (!parentHandle) break;
+    const parentWrappers = parentHandle ? [parentHandle.wrapper] : findWrappersForGoal(parentId);
+    if (parentWrappers.length === 0) break;
+    const primaryParentWrapper = parentWrappers[0];
 
     // If parent is already checked, continue checking grandparents!
-    if (isGoalChecked(parentHandle.wrapper)) {
+    if (isGoalChecked(primaryParentWrapper)) {
       currGoalId = parentId;
       continue;
     }
@@ -317,7 +343,7 @@ function checkDomCascade(goalId: string): void {
         h.goalId !== parentId,
     );
 
-    const subCount = parseSubgoalCountFromDom(parentHandle.wrapper);
+    const subCount = parseSubgoalCountFromDom(primaryParentWrapper);
 
     let isComplete = false;
     if (subCount === 1) {
@@ -335,10 +361,14 @@ function checkDomCascade(goalId: string): void {
     }
 
     if (isComplete) {
-      const parentCb = getNativeGoalCheckbox(parentHandle.wrapper);
-      if (parentCb) {
-        triggerNativeCheckboxClick(parentCb);
-        showToast("✓ All subgoals complete — parent goal completed!");
+      for (const pw of parentWrappers) {
+        if (!isGoalChecked(pw)) {
+          const parentCb = getNativeGoalCheckbox(pw);
+          if (parentCb) {
+            triggerNativeCheckboxClick(parentCb);
+            showToast("✓ All subgoals complete — parent goal completed!");
+          }
+        }
       }
       currGoalId = parentId;
     } else {
@@ -354,14 +384,25 @@ function uncheckDomCascade(goalId: string): void {
 
   while (currGoalId) {
     const childHandle = rows.get(currGoalId);
-    const parentId = childHandle?.domParentId || getGoalParents()[currGoalId];
+    let parentId = childHandle?.domParentId || getGoalParents()[currGoalId];
+    if (!parentId) {
+      for (const w of findWrappersForGoal(currGoalId)) {
+        const detected = detectDomParent(w, currGoalId);
+        if (detected) {
+          parentId = detected;
+          break;
+        }
+      }
+    }
     if (!parentId) break;
 
-    const parentHandle = rows.get(parentId);
-    if (parentHandle && isGoalChecked(parentHandle.wrapper)) {
-      const parentCb = getNativeGoalCheckbox(parentHandle.wrapper);
-      if (parentCb) {
-        triggerNativeCheckboxClick(parentCb);
+    const parentWrappers = findWrappersForGoal(parentId);
+    for (const pWrapper of parentWrappers) {
+      if (isGoalChecked(pWrapper)) {
+        const parentCb = getNativeGoalCheckbox(pWrapper);
+        if (parentCb) {
+          triggerNativeCheckboxClick(parentCb);
+        }
       }
     }
     currGoalId = parentId;
@@ -395,12 +436,12 @@ function handleCheckboxAction(
       const { parentIdsToUncheck } = res.data;
       if (parentIdsToUncheck && parentIdsToUncheck.length > 0) {
         for (const pId of parentIdsToUncheck) {
-          const pWrapper = document.querySelector<HTMLElement>(
-            `.GoalRowWrapper[data-draggable-id*='::goal:${pId}']`,
-          );
-          if (pWrapper && isGoalChecked(pWrapper)) {
-            const pCb = getNativeGoalCheckbox(pWrapper);
-            if (pCb) triggerNativeCheckboxClick(pCb);
+          const pWrappers = findWrappersForGoal(pId);
+          for (const pWrapper of pWrappers) {
+            if (isGoalChecked(pWrapper)) {
+              const pCb = getNativeGoalCheckbox(pWrapper);
+              if (pCb) triggerNativeCheckboxClick(pCb);
+            }
           }
         }
       }
@@ -420,14 +461,14 @@ function handleCheckboxAction(
       const { parentIdsToCheck } = res.data;
       if (parentIdsToCheck && parentIdsToCheck.length > 0) {
         for (const pId of parentIdsToCheck) {
-          const pWrapper = document.querySelector<HTMLElement>(
-            `.GoalRowWrapper[data-draggable-id*='::goal:${pId}']`,
-          );
-          if (pWrapper && !isGoalChecked(pWrapper)) {
-            const pCb = getNativeGoalCheckbox(pWrapper);
-            if (pCb) {
-              triggerNativeCheckboxClick(pCb);
-              showToast("✓ All subgoals complete — parent goal completed!");
+          const pWrappers = findWrappersForGoal(pId);
+          for (const pWrapper of pWrappers) {
+            if (!isGoalChecked(pWrapper)) {
+              const pCb = getNativeGoalCheckbox(pWrapper);
+              if (pCb) {
+                triggerNativeCheckboxClick(pCb);
+                showToast("✓ All subgoals complete — parent goal completed!");
+              }
             }
           }
         }
