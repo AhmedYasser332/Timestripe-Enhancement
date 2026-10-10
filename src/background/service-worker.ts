@@ -561,8 +561,12 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     return null;
   },
   SET_TASK_PROGRESS_NOTE: async (msg) => {
-    const spaceId = await requireActiveSpaceId();
-    await setTaskProgressNote(spaceId, msg.goalId, msg.note);
+    const settings = await getSettings();
+    const targetSpace =
+      settings.activeSpaceId === "all"
+        ? GLOBAL_SPACE_ID
+        : (settings.activeSpaceId ?? (await requireActiveSpaceId()));
+    await setTaskProgressNote(targetSpace, msg.goalId, msg.note);
     await broadcastStateChanged();
     return null;
   },

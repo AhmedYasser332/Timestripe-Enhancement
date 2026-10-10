@@ -44,26 +44,19 @@ export function injectStyles(): void {
       pointer-events: none;
     }
 
-    /* Content line layout resilience */
-    .GoalRow-content {
-      min-width: 0 !important;
-      overflow: hidden !important;
-      display: flex !important;
-      align-items: center !important;
-    }
-
-    /* Protect task titles from breaking letter by letter vertically in narrow calendar columns */
+    /* Protect task titles from breaking letter by letter vertically and prevent squishing to 0px */
     .GoalRow-title,
-    .GoalRow-content [class*="title" i],
-    .GoalRow-content [class*="text" i],
-    .GoalRow-content [class*="name" i] {
+    .GoalRow-content [class*="title" i] {
       white-space: nowrap !important;
       overflow: hidden !important;
       text-overflow: ellipsis !important;
       word-break: keep-all !important;
       overflow-wrap: normal !important;
-      min-width: 0 !important;
-      flex-shrink: 1 !important;
+      min-width: 34px !important;
+      max-width: 100% !important;
+      flex-shrink: 0 !important;
+      display: inline-block !important;
+      vertical-align: middle !important;
     }
 
     /* Project badge pill — adaptive truncation preventing text clipping */
@@ -73,20 +66,21 @@ export function injectStyles(): void {
       gap: 5px;
       margin-inline-start: auto;
       margin-inline-end: 4px;
-      padding: 2.5px 8px 2.5px 7px;
+      padding: 2.5px 7px 2.5px 6px;
       border-radius: 999px;
-      font-size: 11.5px;
+      font-size: 11px;
       font-weight: 500;
       line-height: 1.35;
       white-space: nowrap;
-      min-width: 0;
-      max-width: 52%;
-      flex-shrink: 0;
+      min-width: 18px;
+      max-width: 48%;
+      flex-shrink: 1;
       box-sizing: border-box;
       overflow: hidden;
       user-select: none;
       pointer-events: auto;
       cursor: default;
+      vertical-align: middle;
 
       background: rgba(24, 24, 27, 0.88);
       backdrop-filter: blur(8px);
@@ -108,8 +102,8 @@ export function injectStyles(): void {
       padding-inline-end: 2px;
     }
     .tse-chip-dot {
-      width: 6.5px;
-      height: 6.5px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       flex-shrink: 0;
       background: rgb(var(--tse-color));
@@ -121,17 +115,18 @@ export function injectStyles(): void {
       display: inline-flex;
       align-items: center;
       gap: 3px;
-      margin-inline-start: 6px;
-      margin-inline-end: 4px;
-      padding: 2px 7px;
-      border-radius: 6px;
-      font-size: 11px;
+      margin-inline-start: 5px;
+      margin-inline-end: 12px;
+      padding: 1.5px 6px;
+      border-radius: 5px;
+      font-size: 10.5px;
       font-weight: 600;
       line-height: 1.25;
       white-space: nowrap;
       flex-shrink: 0;
       cursor: pointer;
       user-select: none;
+      vertical-align: middle;
       background: rgba(124, 92, 255, 0.18);
       border: 1px solid rgba(124, 92, 255, 0.4);
       color: #d8b4fe !important;
@@ -274,12 +269,12 @@ export function applyBadge(
       openProgressPopover(goalId, progBadge);
     };
 
-    // Insert right after the title element if available, or prepend/append
-    const titleEl = content.querySelector(".GoalRow-title, [class*='title' i], [class*='text' i]");
-    if (titleEl && titleEl.nextSibling) {
-      content.insertBefore(progBadge, titleEl.nextSibling);
+    // Mount inline right after the title element
+    const titleEl = content.querySelector(".GoalRow-title, [class*='title' i]");
+    if (titleEl) {
+      titleEl.after(progBadge);
     } else {
-      content.appendChild(progBadge);
+      content.prepend(progBadge);
     }
   }
 

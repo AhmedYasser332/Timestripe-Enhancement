@@ -274,13 +274,38 @@ export async function setTaskProgressNote(
   goalId: string,
   note: string | null,
 ): Promise<void> {
+  const trimmed = note?.trim() ?? "";
+  const isClear = !trimmed || trimmed === "0";
+  const allData = await getAllStoredSpaceData();
+
+  // If clearing, purge goalId from EVERY space so it never resurrects!
+  if (isClear) {
+    for (const [sId, data] of allData.entries()) {
+      if (data.taskProgressNotes && goalId in data.taskProgressNotes) {
+        await updateSpaceData(sId, (d) => {
+          const notes = { ...(d.taskProgressNotes ?? {}) };
+          delete notes[goalId];
+          return { ...d, taskProgressNotes: notes };
+        });
+      }
+    }
+    return;
+  }
+
+  // If saving: update targetSpace and purge any stale duplicate from other spaces
+  for (const [sId, data] of allData.entries()) {
+    if (sId !== spaceId && data.taskProgressNotes && goalId in data.taskProgressNotes) {
+      await updateSpaceData(sId, (d) => {
+        const notes = { ...(d.taskProgressNotes ?? {}) };
+        delete notes[goalId];
+        return { ...d, taskProgressNotes: notes };
+      });
+    }
+  }
+
   await updateSpaceData(spaceId, (d) => {
     const notes = { ...(d.taskProgressNotes ?? {}) };
-    if (!note || note.trim().length === 0 || note.trim() === "0") {
-      delete notes[goalId];
-    } else {
-      notes[goalId] = note.trim();
-    }
+    notes[goalId] = trimmed;
     return { ...d, taskProgressNotes: notes };
   });
 }
