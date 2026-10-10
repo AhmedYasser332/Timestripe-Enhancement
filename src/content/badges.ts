@@ -211,18 +211,22 @@ function isIntact(
 ): boolean {
   if (hasInfo) {
     if (settings.colorMode === "strip" && !row.querySelector(`:scope > .${STRIP_CLASS}`)) return false;
-    if (settings.showProjectName && !row.querySelector(`:scope > .GoalRow-content > .${CHIP_CLASS}`)) return false;
+    if (settings.showProjectName && !row.querySelector(`.${CHIP_CLASS}`)) return false;
+  } else {
+    if (row.querySelector(`.${CHIP_CLASS}`)) return false;
   }
   if (hasProgress) {
-    if (!row.querySelector(`:scope > .GoalRow-content > .${PROG_CLASS}`)) return false;
+    if (!row.querySelector(`.${PROG_CLASS}`)) return false;
+  } else {
+    if (row.querySelector(`.${PROG_CLASS}`)) return false;
   }
   return true;
 }
 
 function clearRow(row: HTMLElement): void {
-  row.querySelectorAll(`:scope > .${STRIP_CLASS}`).forEach((el) => el.remove());
-  row.querySelectorAll(`:scope > .GoalRow-content > .${CHIP_CLASS}`).forEach((el) => el.remove());
-  row.querySelectorAll(`:scope > .GoalRow-content > .${PROG_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(`.${STRIP_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(`.${CHIP_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(`.${PROG_CLASS}`).forEach((el) => el.remove());
   delete row.dataset.tseSig;
   delete row.dataset.tseMode;
   delete row.dataset.tseDir;
@@ -254,6 +258,10 @@ export function applyBadge(
   }
 
   row.dataset.tseSig = sig;
+
+  // Purge any existing badges to guarantee no duplicates ever accumulate
+  row.querySelectorAll(`.${PROG_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(`.${CHIP_CLASS}`).forEach((el) => el.remove());
 
   const content = row.querySelector<HTMLElement>(":scope > .GoalRow-content");
 

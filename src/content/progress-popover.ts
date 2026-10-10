@@ -226,17 +226,17 @@ export function openProgressPopover(
   const actions = document.createElement("div");
   actions.className = "tse-prog-actions";
 
-  if (currentVal) {
-    const clearBtn = document.createElement("button");
-    clearBtn.type = "button";
-    clearBtn.className = "tse-prog-btn clear";
-    clearBtn.textContent = "Clear";
-    clearBtn.onclick = (e) => {
-      e.stopPropagation();
-      save("");
-    };
-    actions.appendChild(clearBtn);
-  }
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "tse-prog-btn clear";
+  clearBtn.textContent = "Clear";
+  clearBtn.title = "Clear progress note";
+  clearBtn.onclick = (e) => {
+    e.stopPropagation();
+    input.value = "";
+    save("");
+  };
+  actions.appendChild(clearBtn);
 
   const saveBtn = document.createElement("button");
   saveBtn.type = "button";
