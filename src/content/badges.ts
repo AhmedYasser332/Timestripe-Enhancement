@@ -79,8 +79,10 @@ export function injectStyles(): void {
       overflow: hidden;
       user-select: none;
       pointer-events: auto;
-      cursor: default;
+      cursor: pointer;
       vertical-align: middle;
+      position: relative;
+      transition: max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease, background 0.15s ease;
 
       background: rgba(24, 24, 27, 0.88);
       backdrop-filter: blur(8px);
@@ -93,6 +95,13 @@ export function injectStyles(): void {
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
     }
+    .${CHIP_CLASS}:hover {
+      max-width: 95% !important;
+      z-index: 50 !important;
+      background: #18181b !important;
+      border-color: rgba(255, 255, 255, 0.28) !important;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+    }
     .${CHIP_CLASS} .tse-chip-label {
       overflow: hidden;
       text-overflow: ellipsis;
@@ -100,6 +109,12 @@ export function injectStyles(): void {
       display: inline-block;
       max-width: 100%;
       padding-inline-end: 2px;
+      transition: max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .${CHIP_CLASS}:hover .tse-chip-label {
+      max-width: none !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
     }
     .tse-chip-dot {
       width: 6px;
