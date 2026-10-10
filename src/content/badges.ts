@@ -44,6 +44,22 @@ export function injectStyles(): void {
       pointer-events: none;
     }
 
+    /* GoalRow and content layout */
+    .GoalRowWrapper:hover,
+    .GoalRow:hover,
+    .GoalRow-content:hover {
+      overflow: visible !important;
+    }
+    .GoalRow-content {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      position: relative;
+      row-gap: 2px;
+    }
+
     /* Protect task titles from breaking letter by letter vertically and prevent squishing to 0px */
     .GoalRow-title,
     .GoalRow-content [class*="title" i] {
@@ -52,20 +68,30 @@ export function injectStyles(): void {
       text-overflow: ellipsis !important;
       word-break: keep-all !important;
       overflow-wrap: normal !important;
-      min-width: 34px !important;
-      max-width: 100% !important;
+      min-width: 32px !important;
+      max-width: 50% !important;
       flex-shrink: 0 !important;
       display: inline-block !important;
       vertical-align: middle !important;
     }
 
-    /* Project badge pill — adaptive truncation preventing text clipping */
+    /* Stable badge wrapper container for leftward hover expansion */
+    .tse-badge-container {
+      margin-inline-start: auto;
+      margin-inline-end: 2px;
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 1;
+      min-width: 18px;
+      max-width: 48%;
+      vertical-align: middle;
+    }
+
     .${CHIP_CLASS} {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      margin-inline-start: auto;
-      margin-inline-end: 4px;
       padding: 2.5px 7px 2.5px 6px;
       border-radius: 999px;
       font-size: 11px;
@@ -73,16 +99,13 @@ export function injectStyles(): void {
       line-height: 1.35;
       white-space: nowrap;
       min-width: 18px;
-      max-width: 48%;
-      flex-shrink: 1;
+      width: 100%;
       box-sizing: border-box;
       overflow: hidden;
       user-select: none;
       pointer-events: auto;
       cursor: pointer;
       vertical-align: middle;
-      position: relative;
-      transition: max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease, background 0.15s ease;
 
       background: rgba(24, 24, 27, 0.88);
       backdrop-filter: blur(8px);
@@ -94,13 +117,23 @@ export function injectStyles(): void {
         0 2px 4px rgba(0, 0, 0, 0.35);
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
+      transition: box-shadow 0.15s ease, background 0.15s ease;
     }
-    .${CHIP_CLASS}:hover {
-      max-width: 95% !important;
-      z-index: 50 !important;
+    .tse-badge-container:hover {
+      z-index: 9999 !important;
+    }
+    .tse-badge-container:hover .${CHIP_CLASS} {
+      position: absolute;
+      inset-inline-end: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: max-content;
+      max-width: 250px;
+      z-index: 9999 !important;
       background: #18181b !important;
-      border-color: rgba(255, 255, 255, 0.28) !important;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+      border-color: rgba(255, 255, 255, 0.35) !important;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+      overflow: visible !important;
     }
     .${CHIP_CLASS} .tse-chip-label {
       overflow: hidden;
@@ -109,12 +142,11 @@ export function injectStyles(): void {
       display: inline-block;
       max-width: 100%;
       padding-inline-end: 2px;
-      transition: max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .${CHIP_CLASS}:hover .tse-chip-label {
-      max-width: none !important;
+    .tse-badge-container:hover .tse-chip-label {
       overflow: visible !important;
       text-overflow: clip !important;
+      max-width: none !important;
     }
     .tse-chip-dot {
       width: 6px;
@@ -130,11 +162,11 @@ export function injectStyles(): void {
       display: inline-flex;
       align-items: center;
       gap: 3px;
-      margin-inline-start: 5px;
-      margin-inline-end: 12px;
-      padding: 1.5px 6px;
-      border-radius: 5px;
-      font-size: 10.5px;
+      margin-inline-start: 2px;
+      margin-inline-end: 6px;
+      padding: 1.5px 5.5px;
+      border-radius: 4px;
+      font-size: 10px;
       font-weight: 600;
       line-height: 1.25;
       white-space: nowrap;
@@ -226,9 +258,9 @@ function isIntact(
 ): boolean {
   if (hasInfo) {
     if (settings.colorMode === "strip" && !row.querySelector(`:scope > .${STRIP_CLASS}`)) return false;
-    if (settings.showProjectName && !row.querySelector(`.${CHIP_CLASS}`)) return false;
+    if (settings.showProjectName && !row.querySelector(".tse-badge-container")) return false;
   } else {
-    if (row.querySelector(`.${CHIP_CLASS}`)) return false;
+    if (row.querySelector(".tse-badge-container, .tse-badge")) return false;
   }
   if (hasProgress) {
     if (!row.querySelector(`.${PROG_CLASS}`)) return false;
@@ -240,6 +272,7 @@ function isIntact(
 
 function clearRow(row: HTMLElement): void {
   row.querySelectorAll(`.${STRIP_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(".tse-badge-container").forEach((el) => el.remove());
   row.querySelectorAll(`.${CHIP_CLASS}`).forEach((el) => el.remove());
   row.querySelectorAll(`.${PROG_CLASS}`).forEach((el) => el.remove());
   delete row.dataset.tseSig;
@@ -276,6 +309,7 @@ export function applyBadge(
 
   // Purge any existing badges to guarantee no duplicates ever accumulate
   row.querySelectorAll(`.${PROG_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(".tse-badge-container").forEach((el) => el.remove());
   row.querySelectorAll(`.${CHIP_CLASS}`).forEach((el) => el.remove());
 
   const content = row.querySelector<HTMLElement>(":scope > .GoalRow-content");
@@ -292,13 +326,7 @@ export function applyBadge(
       openProgressPopover(goalId, progBadge);
     };
 
-    // Mount inline right after the title element
-    const titleEl = content.querySelector(".GoalRow-title, [class*='title' i]");
-    if (titleEl) {
-      titleEl.after(progBadge);
-    } else {
-      content.prepend(progBadge);
-    }
+    content.appendChild(progBadge);
   }
 
   if (!info) return;
@@ -314,6 +342,8 @@ export function applyBadge(
   }
 
   if (settings.showProjectName && info.name && content) {
+    const container = document.createElement("div");
+    container.className = "tse-badge-container";
     const chip = document.createElement("span");
     chip.className = CHIP_CLASS;
     chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
@@ -324,6 +354,13 @@ export function applyBadge(
     label.dir = "auto";
     label.textContent = info.name;
     chip.append(dot, label);
-    content.appendChild(chip);
+    container.appendChild(chip);
+
+    const progEl = content.querySelector(`.${PROG_CLASS}`);
+    if (progEl) {
+      content.insertBefore(container, progEl);
+    } else {
+      content.appendChild(container);
+    }
   }
 }
