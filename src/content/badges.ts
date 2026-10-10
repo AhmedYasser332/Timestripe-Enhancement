@@ -108,12 +108,17 @@ export function injectStyles(): void {
         0 2px 4px rgba(0, 0, 0, 0.35);
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease, border-color 0.15s ease;
     }
     .${CHIP_CLASS}:hover {
-      border-color: rgba(255, 255, 255, 0.35) !important;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.85) !important;
+      flex-shrink: 0 !important;
+      width: max-content !important;
+      max-width: 250px !important;
+      overflow: visible !important;
       z-index: 10000 !important;
+      background: #18181b !important;
+      border-color: rgba(255, 255, 255, 0.4) !important;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
     }
     .${CHIP_CLASS} .tse-chip-label {
       overflow: hidden;
@@ -123,6 +128,11 @@ export function injectStyles(): void {
       max-width: 100%;
       padding-inline-end: 2px;
     }
+    .${CHIP_CLASS}:hover .tse-chip-label {
+      overflow: visible !important;
+      text-overflow: clip !important;
+      max-width: none !important;
+    }
     .tse-chip-dot {
       width: 6px;
       height: 6px;
@@ -130,31 +140,6 @@ export function injectStyles(): void {
       flex-shrink: 0;
       background: rgb(var(--tse-color));
       box-shadow: 0 0 5px rgb(var(--tse-color) / 0.7);
-    }
-
-    /* Floating overlay expansion on hover extending leftward with ZERO JITTER */
-    .${CHIP_CLASS}::after {
-      content: attr(data-full-name);
-      position: absolute;
-      inset-inline-end: 0;
-      top: 50%;
-      transform: translateY(-50%);
-      background: #18181b;
-      color: #f4f4f5;
-      font-size: 11px;
-      font-weight: 500;
-      padding: 2px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.32);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.2);
-      white-space: nowrap;
-      pointer-events: none;
-      opacity: 0;
-      z-index: 10000;
-      transition: opacity 0.12s ease;
-    }
-    .${CHIP_CLASS}:hover::after {
-      opacity: 1;
     }
 
     /* Task Progress / Remaining Badge */
