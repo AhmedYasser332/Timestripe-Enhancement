@@ -2412,26 +2412,31 @@ function renderSettingsPanel(
   const refreshJsonBtn = document.createElement("button");
   refreshJsonBtn.type = "button";
   refreshJsonBtn.className = "tse-btn-secondary";
-  refreshJsonBtn.textContent = "🔄 Refresh JSON";
-  refreshJsonBtn.title = "Sync with Timestripe API and prune deleted tasks/projects";
+  refreshJsonBtn.textContent = "🔄 Check stale data";
+  refreshJsonBtn.title = "Read-only: counts local entries whose task no longer exists. Removes nothing.";
   bindActivate(refreshJsonBtn, () => {
     void (async () => {
       refreshJsonBtn.disabled = true;
-      refreshJsonBtn.textContent = "🔄 Refreshing…";
-      const res = await sendToBg<{ backup: BackupPayload; prunedTotal: number; prunedLinks: number }>({
+      refreshJsonBtn.textContent = "🔄 Checking...";
+      const res = await sendToBg<{ backup: BackupPayload; staleTotal: number; staleLinks: number }>({
         type: "REFRESH_BACKUP",
       });
       refreshJsonBtn.disabled = false;
-      refreshJsonBtn.textContent = "🔄 Refresh JSON";
+      refreshJsonBtn.textContent = "🔄 Check stale data";
       if (!res?.ok || !res.data) {
-        showToast("Refresh failed");
+        showToast("Check failed. Nothing was changed.");
         return;
       }
-      showToast(
-        res.data.prunedTotal > 0
-          ? `🔄 JSON refreshed! Pruned ${res.data.prunedTotal} deleted/orphaned items.`
-          : "🔄 JSON refreshed! All projects and tasks are 100% up to date.",
+      if (res.data.staleTotal === 0) {
+        showToast("No stale local entries found.");
+        return;
+      }
+      const confirmed = window.confirm(
+        `${res.data.staleTotal} stale local entries found (links, colors, notes). Remove them? This cannot be undone.`,
       );
+      if (!confirmed) return;
+      const pruned = await sendToBg<{ removed: number }>({ type: "PRUNE_ORPHANS" });
+      showToast(pruned?.ok ? `Removed ${pruned.data.removed} stale entries.` : "Cleanup failed.");
     })();
   });
 

@@ -44,11 +44,30 @@ const SW_PATCH_SRC = `
   if (self.__mockInstalled) return;
   self.__mockInstalled = true;
   self.__mockHits = 0;
+  self.__patchHits = 0;
   const spaces = ${JSON.stringify(MOCK_SPACES)};
   const goals = ${JSON.stringify(MOCK_GOALS)};
 
+  // Timestripe cascades a delete to every descendant (mirrors the real API).
+  function cascadeDelete(id) {
+    for (const k of goals.filter((g) => g.parent_id === id).map((g) => g.id)) cascadeDelete(k);
+    const idx = goals.findIndex((g) => g.id === id);
+    if (idx >= 0) goals.splice(idx, 1);
+  }
+  // Test hook: failNth(method, prefix, n, status) fails the nth matching request.
+  self.__failPlan = [];
+  self.__takeFailure = (method, pathname) => {
+    for (const f of self.__failPlan) {
+      if (f.method !== method || !pathname.startsWith(f.prefix)) continue;
+      f.seen = (f.seen || 0) + 1;
+      if (f.seen === f.n) return { status: f.status, body: { detail: "injected failure" } };
+    }
+    return null;
+  };
+
   function handler(pathname, method, bodyObj) {
     self.__mockHits++;
+    if (method === "PATCH") self.__patchHits++;
     if (pathname.endsWith("users/me/")) {
       return { status: 200, body: { id: "u1", email: "t@t.com", first_name: "Test", last_name: "User" } };
     }
@@ -56,12 +75,17 @@ const SW_PATCH_SRC = `
     if (pathname.startsWith("goals/") && pathname.includes("space_id=")) {
       return { status: 200, body: { results: goals, next: null } };
     }
+    const failure = self.__takeFailure(method, pathname);
+    if (failure) return failure;
     const m = /^goals\\/([A-Za-z0-9]{8})\\/?$/.exec(pathname);
     if (m) {
       const goal = goals.find((g) => g.id === m[1]);
       if (method === "GET") return goal ? { status: 200, body: goal } : { status: 404, body: {} };
       if (method === "PATCH" && goal && bodyObj) { Object.assign(goal, bodyObj); return { status: 200, body: goal }; }
-      if (method === "DELETE") return { status: 204, body: "" };
+      if (method === "DELETE") {
+        if (goal) cascadeDelete(goal.id);
+        return { status: 204, body: "" };
+      }
     }
     if (pathname === "goals/" && method === "POST" && bodyObj) {
       const id = Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -502,6 +526,30 @@ await step("T21 no page JS errors during the whole run", async () => {
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+await step("F1 scheduler: a failing PATCH is reported, and Retry resends only that goal", async () => {
+  // Fail the 2nd PATCH of the next apply; the other goal must still succeed.
+  await sw0.evaluate(() => {
+    self.__failPlan.push({ method: "PATCH", prefix: "goals/", n: 2, status: 500 });
+  });
+  await page.locator(".tse-bar-btn:has-text('Schedule')").first().click().catch(() => {});
+  await page.waitForSelector(".tse-sched-modal-box", { timeout: 4000 });
+  await page.click(".tse-sched-modal-box .tse-btn-primary");
+  await sleep(700);
+  const retryLabel = await page.locator(".tse-sched-modal-box .tse-btn-primary").textContent();
+  assert(/Retry Failed \(1\)/.test(retryLabel), `expected "Retry Failed (1)", got "${retryLabel}"`);
+  const failedRows = await page.locator(".tse-sched-row[data-goal-id][style*='outline']").count();
+  assert(failedRows === 1, `expected exactly 1 highlighted failed row, got ${failedRows}`);
+
+  // Retry: the injected failure was one-shot, so the retry must send exactly one PATCH.
+  const patchesBefore = await sw0.evaluate(() => self.__patchHits ?? 0);
+  await page.click(".tse-sched-modal-box .tse-btn-primary");
+  await sleep(700);
+  const sent = await sw0.evaluate(() => self.__patchHits ?? 0);
+  assert(sent - patchesBefore === 1, `retry should send exactly 1 PATCH, sent ${sent - patchesBefore}`);
+  assert((await page.locator(".tse-sched-modal-box").count()) === 0, "scheduler should close after full success");
+});
+
+
 console.log("\n=== SUMMARY ===");
 const failed = results.filter(([s]) => s === "FAIL");
 for (const [status, name, msg] of results) {
@@ -513,3 +561,5 @@ console.log(`Mock API hits: ${totalHits}`);
 
 await context.close();
 if (failed.length > 0) process.exit(1);
+
+

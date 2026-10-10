@@ -12,7 +12,7 @@ import type { GoalTemplate, TemplateNode, TSGoal } from "../shared/types";
 import { pushAction } from "./history";
 import { sendToBg } from "./messaging";
 import { getSelectedIds, getSelectedRoots } from "./selection-state";
-import { getTaskColorOverrides, getViewState } from "./state";
+import { getTaskColorOverrides, getTaskProjectLinks } from "./state";
 import { showToast } from "./toast";
 
 let activeTemplatesModal: HTMLElement | null = null;
@@ -407,17 +407,22 @@ export async function openTemplatesModal(initialTab: "apply" | "save" = "apply")
         if (r?.ok && r.data) goalsMap.set(id, r.data);
       }
 
+      // Anchor = the root's date, else the earliest dated selected task. Never "today":
+      // a template saved later must keep its original relative spacing.
       const rootGoal = goalsMap.get(primaryRootId);
-      const rootAnchorDate = rootGoal?.date ?? new Date().toISOString().split("T")[0];
+      const datedSelection = [...goalsMap.values()].map((g) => g.date).filter((d): d is string => !!d).sort();
+      const rootAnchorDate = rootGoal?.date ?? datedSelection[0] ?? null;
 
-      const assignments = getViewState().assignments;
+      const explicitLinks = getTaskProjectLinks();
       const overrides = getTaskColorOverrides();
 
-      // 2. Build template nodes
+      // 2. Build template nodes. Explicit links (including the "No Project" override) are stored
+      // as-is; inherited projects are not copied, so they keep inheriting after the template is applied.
       const nodes: TemplateNode[] = [];
       for (const [id, goal] of goalsMap.entries()) {
-        const offset = goal.date ? computeDayOffset(rootAnchorDate, goal.date) : null;
+        const offset = goal.date && rootAnchorDate ? computeDayOffset(rootAnchorDate, goal.date) : null;
         const parentId = goal.parent_id && goalsMap.has(goal.parent_id) ? goal.parent_id : null;
+        const link = explicitLinks[id];
 
         nodes.push({
           id,
@@ -426,7 +431,7 @@ export async function openTemplatesModal(initialTab: "apply" | "save" = "apply")
           description: goal.description ?? "",
           horizon: goal.horizon,
           dayOffset: offset,
-          projectId: assignments[id]?.source === "explicit" ? assignments[id].projectId : null,
+          projectId: link ? link.projectId : null,
           colorOverride: overrides[id] ?? null,
         });
       }

@@ -153,19 +153,24 @@ export function SettingsTab({ settings, onSettingsChanged }: Props): React.JSX.E
   }, []);
 
   const refreshJsonBackup = useCallback(async () => {
-    setBackupStatus("🔄 Refreshing JSON and syncing with Timestripe…");
-    const res = await callBg<{ backup: BackupPayload; prunedTotal: number; prunedLinks: number }>({
+    setBackupStatus("🔄 Checking for stale local entries...");
+    const res = await callBg<{ backup: BackupPayload; staleTotal: number; staleLinks: number }>({
       type: "REFRESH_BACKUP",
     });
     if (!res) {
-      setBackupStatus("Error: Could not refresh backup data.");
+      setBackupStatus("Error: Check failed. Nothing was changed.");
       return;
     }
-    setBackupStatus(
-      res.prunedTotal > 0
-        ? `🔄 JSON refreshed! Pruned ${res.prunedTotal} deleted/orphaned items.`
-        : "🔄 JSON refreshed! All projects and tasks are 100% up to date.",
-    );
+    if (res.staleTotal === 0) {
+      setBackupStatus("No stale local entries found.");
+      return;
+    }
+    if (!window.confirm(`${res.staleTotal} stale local entries found (links, colors, notes). Remove them? This cannot be undone.`)) {
+      setBackupStatus("Cleanup cancelled. Nothing was changed.");
+      return;
+    }
+    const pruned = await callBg<{ removed: number }>({ type: "PRUNE_ORPHANS" });
+    setBackupStatus(pruned ? `Removed ${pruned.removed} stale entries.` : "Cleanup failed.");
     onSettingsChanged();
   }, [onSettingsChanged]);
 

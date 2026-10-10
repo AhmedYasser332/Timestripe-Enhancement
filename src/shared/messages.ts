@@ -17,6 +17,8 @@ export interface BackupPayload {
   exportedAt: string;
   spaceId: string;
   data: SpaceData;
+  /** Present in "All Spaces" exports: each space partition, so import restores it to its own space. */
+  perSpace?: Record<string, SpaceData>;
 }
 
 export interface DuplicateOptions {
@@ -113,6 +115,7 @@ export type CheckSubgoalsStatusResult = {
 };
 export type ExportBackupMessage = { type: "EXPORT_BACKUP" };
 export type RefreshBackupMessage = { type: "REFRESH_BACKUP" };
+export type PruneOrphansMessage = { type: "PRUNE_ORPHANS" };
 export type ImportBackupMessage = {
   type: "IMPORT_BACKUP";
   payload: BackupPayload;
@@ -166,6 +169,7 @@ export type BgMessage =
   | CheckSubgoalsStatusMessage
   | ExportBackupMessage
   | RefreshBackupMessage
+  | PruneOrphansMessage
   | ImportBackupMessage
   | ListSpacesMessage
   | SetActiveSpaceMessage
@@ -214,7 +218,8 @@ export type BgResponseMap = {
   UNCHECK_ALL_DESCENDANTS: UncheckAllDescendantsResult;
   CHECK_SUBGOALS_STATUS: CheckSubgoalsStatusResult;
   EXPORT_BACKUP: BackupPayload;
-  REFRESH_BACKUP: { backup: BackupPayload; prunedTotal: number; prunedLinks: number };
+  REFRESH_BACKUP: { backup: BackupPayload; staleTotal: number; staleLinks: number };
+  PRUNE_ORPHANS: { removed: number };
   IMPORT_BACKUP: { restoredProjects: number; restoredTemplates: number };
   LIST_SPACES: TSSpace[];
   SET_ACTIVE_SPACE: null;

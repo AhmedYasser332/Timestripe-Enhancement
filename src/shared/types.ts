@@ -73,6 +73,14 @@ export interface TaskTextConfig {
   alignment?: TextAlignment;
 }
 
+export interface PruneCounts {
+  prunedLinks: number;
+  prunedOverrides: number;
+  prunedTexts: number;
+  prunedNotes: number;
+  total: number;
+}
+
 export interface SpaceData {
   projects: Project[];
   taskProjectLinks: Record<string, TaskProjectLink>;

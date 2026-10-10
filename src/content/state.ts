@@ -255,6 +255,10 @@ export function getTaskTextConfigs(): Record<string, TaskTextConfig> {
   return taskTextConfigs;
 }
 
+export function getTaskProjectLinks(): Record<string, { projectId: string }> {
+  return taskProjectLinks;
+}
+
 export function getTaskProgressNotes(): Record<string, string> {
   return taskProgressNotes;
 }

@@ -37,7 +37,9 @@ export function buildSwPatch(spaces = MOCK_SPACES, goals = MOCK_GOALS) {
       const goal = goals.find((g) => g.id === m[1]);
       if (method === "GET") return goal ? { status: 200, body: goal } : { status: 404, body: {} };
       if (method === "PATCH" && goal && bodyObj) { Object.assign(goal, bodyObj); return { status: 200, body: goal }; }
-      if (method === "DELETE") return { status: 204, body: "" };
+      if (method === "DELETE") {
+        return { status: 204, body: "" };
+      }
     }
     if (pathname === "goals/" && method === "POST" && bodyObj) {
       const id = Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -87,3 +89,5 @@ export const SEED_STORAGE = `
     });
   }
 `;
+
+

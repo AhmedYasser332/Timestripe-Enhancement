@@ -776,75 +776,80 @@ export async function openSchedulerModal(selectedGoalIds: string[]): Promise<voi
   saveBtn.className = "tse-btn tse-btn-primary";
   saveBtn.textContent = "Apply Schedule";
 
-  saveBtn.onclick = async () => {
+  // Rows that already saved in an earlier attempt are never sent again, so retry only touches failures.
+  let pending = new Map<string, string | null>();
+  const markFailedRows = (failedIds: Set<string>): void => {
+    table.querySelectorAll("tr[data-goal-id]").forEach((tr) => {
+      const row = tr as HTMLElement;
+      const gId = row.getAttribute("data-goal-id");
+      const bad = gId !== null && failedIds.has(gId);
+      row.style.outline = bad ? "1px solid #ef4444" : "";
+      row.style.background = bad ? "rgba(239, 68, 68, 0.1)" : "";
+    });
+  };
+
+  const runAttempt = async (): Promise<void> => {
+    const updates = Array.from(pending.entries()).map(([goalId, date]) => ({ goalId, date }));
+    if (updates.length === 0) return;
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
 
-    const updates: Array<{ goalId: string; date: string | null }> = [];
-    for (const [id, date] of dateState.entries()) {
-      updates.push({ goalId: id, date });
-    }
-
     try {
-      const res = await sendToBg<ScheduleGoalsResult>({
-        type: "SCHEDULE_GOALS",
-        updates,
-      });
-
-      if (res?.ok) {
-        const { updated, failed, results } = res.data;
-        if (failed === 0) {
-          showToast(`Scheduled ${updated} goals`);
-          closeSchedulerModal();
-        } else {
-          showToast(`Scheduled ${updated} goals. ${failed} failed.`);
-          const failedIds = new Set(results.filter((r) => !r.success).map((r) => r.goalId));
-          table.querySelectorAll("tr[data-goal-id]").forEach((tr) => {
-            const gId = tr.getAttribute("data-goal-id");
-            if (gId && failedIds.has(gId)) {
-              (tr as HTMLElement).style.outline = "1px solid #ef4444";
-              (tr as HTMLElement).style.background = "rgba(239, 68, 68, 0.1)";
-            } else if (gId) {
-              (tr as HTMLElement).style.outline = "";
-              (tr as HTMLElement).style.background = "";
-            }
-          });
-          saveBtn.disabled = false;
-          saveBtn.textContent = `Retry Failed (${failed})`;
-        }
-
-        // Push to History Stack for Ctrl+Z Undo ONLY for goals that succeeded
-        const succeededIds = new Set(results.filter((r) => r.success).map((r) => r.goalId));
-        if (succeededIds.size > 0) {
-          const revertUpdates = Array.from(originalDates.entries())
-            .filter(([goalId]) => succeededIds.has(goalId))
-            .map(([goalId, date]) => ({ goalId, date }));
-
-          const redoUpdates = updates.filter((u) => succeededIds.has(u.goalId));
-
-          pushAction({
-            id: crypto.randomUUID(),
-            description: `Fast Schedule: ${succeededIds.size} tasks`,
-            undo: async () => {
-              await sendToBg({ type: "SCHEDULE_GOALS", updates: revertUpdates });
-              showToast("Undid Fast Schedule (dates restored)");
-            },
-            redo: async () => {
-              await sendToBg({ type: "SCHEDULE_GOALS", updates: redoUpdates });
-              showToast("Redid Fast Schedule");
-            },
-          });
-        }
-      } else {
+      const res = await sendToBg<ScheduleGoalsResult>({ type: "SCHEDULE_GOALS", updates });
+      if (!res?.ok) {
         showToast(`Scheduling failed: ${res?.error ?? "Unknown error"}`);
         saveBtn.disabled = false;
         saveBtn.textContent = "Apply Schedule";
+        return;
       }
+
+      const { updated, failed, results } = res.data;
+      const succeeded = results.filter((r) => r.success).map((r) => r.goalId);
+      const failedIds = new Set(results.filter((r) => !r.success).map((r) => r.goalId));
+
+      if (succeeded.length > 0) {
+        // Undo/redo covers only the rows this attempt actually changed.
+        const revertUpdates = succeeded.map((goalId) => ({ goalId, date: originalDates.get(goalId) ?? null }));
+        const redoUpdates = succeeded.map((goalId) => ({ goalId, date: pending.get(goalId) ?? null }));
+        pushAction({
+          id: crypto.randomUUID(),
+          description: `Fast Schedule: ${succeeded.length} tasks`,
+          undo: async () => {
+            await sendToBg({ type: "SCHEDULE_GOALS", updates: revertUpdates });
+            showToast("Undid Fast Schedule (dates restored)");
+          },
+          redo: async () => {
+            await sendToBg({ type: "SCHEDULE_GOALS", updates: redoUpdates });
+            showToast("Redid Fast Schedule");
+          },
+        });
+      }
+
+      // Successful rows leave the pending set; only failures remain for retry.
+      for (const id of succeeded) pending.delete(id);
+
+      if (failed === 0) {
+        showToast(`Scheduled ${updated} goals`);
+        closeSchedulerModal();
+        return;
+      }
+
+      showToast(`Scheduled ${updated} goals. ${failed} failed: retry or close.`);
+      markFailedRows(failedIds);
+      saveBtn.disabled = false;
+      saveBtn.textContent = `Retry Failed (${failed})`;
     } catch (e) {
       showToast(`Error: ${e instanceof Error ? e.message : String(e)}`);
       saveBtn.disabled = false;
       saveBtn.textContent = "Apply Schedule";
     }
+  };
+
+  saveBtn.onclick = () => {
+    if (pending.size === 0) {
+      for (const [id, date] of dateState.entries()) pending.set(id, date);
+    }
+    void runAttempt();
   };
 
   actions.append(cancelBtn, saveBtn);

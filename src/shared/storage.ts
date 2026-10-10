@@ -4,7 +4,7 @@
  * lives in its own key and never enters the bundle.
  */
 
-import type { Project, Settings, SpaceData, TaskProjectLink } from "./types";
+import type { Project, Settings, SpaceData } from "./types";
 
 const SCHEMA_VERSION = 1;
 const SCHEMA_KEY = "schemaVersion";
@@ -308,82 +308,4 @@ export async function setTaskProgressNote(
     notes[goalId] = trimmed;
     return { ...d, taskProgressNotes: notes };
   });
-}
-
-export async function pruneOrphanedStorageData(aliveGoalIds?: Set<string>): Promise<{ prunedLinks: number; prunedOverrides: number; prunedTexts: number }> {
-  const allProjects = await getAllProjects();
-  const validProjectIds = new Set(allProjects.map((p) => p.id));
-  const allData = await getAllStoredSpaceData();
-
-  let totalPrunedLinks = 0;
-  let totalPrunedOverrides = 0;
-  let totalPrunedTexts = 0;
-
-  for (const [sId, data] of allData.entries()) {
-    let changed = false;
-
-    // 1. Prune taskProjectLinks
-    const nextLinks: Record<string, TaskProjectLink> = {};
-    for (const [goalId, link] of Object.entries(data.taskProjectLinks ?? {})) {
-      if (aliveGoalIds && !aliveGoalIds.has(goalId)) {
-        totalPrunedLinks++;
-        changed = true;
-        continue;
-      }
-      if (!validProjectIds.has(link.projectId)) {
-        totalPrunedLinks++;
-        changed = true;
-        continue;
-      }
-      nextLinks[goalId] = link;
-    }
-
-    // 2. Prune taskColorOverrides
-    const nextOverrides: Record<string, string> = {};
-    for (const [goalId, color] of Object.entries(data.taskColorOverrides ?? {})) {
-      if (aliveGoalIds && !aliveGoalIds.has(goalId)) {
-        totalPrunedOverrides++;
-        changed = true;
-        continue;
-      }
-      nextOverrides[goalId] = color;
-    }
-
-    // 3. Prune taskTextConfigs
-    const nextTexts: Record<string, import("./types").TaskTextConfig> = {};
-    for (const [goalId, cfg] of Object.entries(data.taskTextConfigs ?? {})) {
-      if (aliveGoalIds && !aliveGoalIds.has(goalId)) {
-        totalPrunedTexts++;
-        changed = true;
-        continue;
-      }
-      nextTexts[goalId] = cfg;
-    }
-
-    // 4. Prune taskProgressNotes
-    const nextNotes: Record<string, string> = {};
-    for (const [goalId, note] of Object.entries(data.taskProgressNotes ?? {})) {
-      if (aliveGoalIds && !aliveGoalIds.has(goalId)) {
-        changed = true;
-        continue;
-      }
-      nextNotes[goalId] = note;
-    }
-
-    if (changed) {
-      await updateSpaceData(sId, (d) => ({
-        ...d,
-        taskProjectLinks: nextLinks,
-        taskColorOverrides: nextOverrides,
-        taskTextConfigs: nextTexts,
-        taskProgressNotes: nextNotes,
-      }));
-    }
-  }
-
-  return {
-    prunedLinks: totalPrunedLinks,
-    prunedOverrides: totalPrunedOverrides,
-    prunedTexts: totalPrunedTexts,
-  };
 }
