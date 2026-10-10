@@ -23,6 +23,7 @@ let projects: Project[] = [];
 let taskProjectLinks: Record<string, { projectId: string }> = {};
 let taskColorOverrides: Record<string, string> = {};
 let taskTextConfigs: Record<string, TaskTextConfig> = {};
+let taskProgressNotes: Record<string, string> = {};
 let goalParents: Record<string, string | null> = {};
 let assignments: Record<string, AssignmentInfo> = {};
 let onUpdateCb: (() => void) | null = null;
@@ -80,6 +81,7 @@ async function loadSpaceData(spaceId: string): Promise<void> {
     const mergedLinks: Record<string, { projectId: string }> = {};
     const mergedOverrides: Record<string, string> = {};
     const mergedTexts: Record<string, TaskTextConfig> = {};
+    const mergedNotes: Record<string, string> = {};
 
     for (const [key, val] of Object.entries(all)) {
       if (key.startsWith("data:") && val && typeof val === "object") {
@@ -90,12 +92,14 @@ async function loadSpaceData(spaceId: string): Promise<void> {
         Object.assign(mergedLinks, d.taskProjectLinks ?? {});
         Object.assign(mergedOverrides, d.taskColorOverrides ?? {});
         Object.assign(mergedTexts, d.taskTextConfigs ?? {});
+        Object.assign(mergedNotes, d.taskProgressNotes ?? {});
       }
     }
     projects = Array.from(projMap.values());
     taskProjectLinks = mergedLinks;
     taskColorOverrides = mergedOverrides;
     taskTextConfigs = mergedTexts;
+    taskProgressNotes = mergedNotes;
   } else {
     const spaceKey = `data:${spaceId}`;
     const globalKey = `data:global`;
@@ -114,6 +118,7 @@ async function loadSpaceData(spaceId: string): Promise<void> {
     taskProjectLinks = { ...(globalData?.taskProjectLinks ?? {}), ...(spaceData?.taskProjectLinks ?? {}) };
     taskColorOverrides = { ...(globalData?.taskColorOverrides ?? {}), ...(spaceData?.taskColorOverrides ?? {}) };
     taskTextConfigs = { ...(globalData?.taskTextConfigs ?? {}), ...(spaceData?.taskTextConfigs ?? {}) };
+    taskProgressNotes = { ...(globalData?.taskProgressNotes ?? {}), ...(spaceData?.taskProgressNotes ?? {}) };
 
     const cachedParents = res[pKey] as Record<string, string | null> | undefined;
     if (cachedParents && typeof cachedParents === "object") {
@@ -248,6 +253,19 @@ export function getTaskColorOverrides(): Record<string, string> {
 
 export function getTaskTextConfigs(): Record<string, TaskTextConfig> {
   return taskTextConfigs;
+}
+
+export function getTaskProgressNotes(): Record<string, string> {
+  return taskProgressNotes;
+}
+
+export function optimisticProgressNote(goalId: string, note: string | null): void {
+  if (!note || note.trim().length === 0 || note.trim() === "0") {
+    delete taskProgressNotes[goalId];
+  } else {
+    taskProgressNotes[goalId] = note.trim();
+  }
+  onUpdateCb?.();
 }
 
 export function optimisticTextConfig(goalId: string, patch: Partial<TaskTextConfig> | null): void {

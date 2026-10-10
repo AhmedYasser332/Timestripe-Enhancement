@@ -1,17 +1,16 @@
 /**
- * Renders project indicators on goal rows — Strip Mode and Full Color Mode (PRD §9, §10).
+ * Renders project indicators and task progress badges on goal rows (PRD §9, §10).
  * Rendering is reconciling: every call converges the row to the desired state, so renames,
- * recolors, reassignments and mode switches all apply without a page refresh.
+ * recolors, reassignments, progress changes and mode switches all apply without a page refresh.
  */
 
 import { hexToRgbTriple } from "../shared/colors";
 import type { AssignmentInfo, Settings, TaskTextConfig } from "../shared/types";
+import { openProgressPopover } from "./progress-popover";
 
 const STRIP_CLASS = "tse-strip";
-// NOTE: must NOT be "tse-chip" — that class belongs to the interactive
-// dashboard chips; styling this badge with the same name once leaked
-// `pointer-events: none` onto them and froze every chip click in the UI.
 const CHIP_CLASS = "tse-badge";
+const PROG_CLASS = "tse-progress-badge";
 
 /**
  * One-time style injection.
@@ -44,21 +43,50 @@ export function injectStyles(): void {
       box-shadow: 0 0 8px rgb(var(--tse-color) / 0.45);
       pointer-events: none;
     }
+
+    /* Content line layout resilience */
+    .GoalRow-content {
+      min-width: 0 !important;
+      overflow: hidden !important;
+      display: flex !important;
+      align-items: center !important;
+    }
+
+    /* Protect task titles from breaking letter by letter vertically in narrow calendar columns */
+    .GoalRow-title,
+    .GoalRow-content [class*="title" i],
+    .GoalRow-content [class*="text" i],
+    .GoalRow-content [class*="name" i] {
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      word-break: keep-all !important;
+      overflow-wrap: normal !important;
+      min-width: 0 !important;
+      flex-shrink: 1 !important;
+    }
+
+    /* Project badge pill — adaptive truncation preventing text clipping */
     .${CHIP_CLASS} {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      margin-inline-start: 10px;
+      gap: 5px;
+      margin-inline-start: auto;
       margin-inline-end: 4px;
-      padding: 2.5px 9px 2.5px 7px;
+      padding: 2.5px 8px 2.5px 7px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 500;
       line-height: 1.35;
       white-space: nowrap;
+      min-width: 0;
+      max-width: 52%;
       flex-shrink: 0;
+      box-sizing: border-box;
+      overflow: hidden;
       user-select: none;
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: default;
 
       background: rgba(24, 24, 27, 0.88);
       backdrop-filter: blur(8px);
@@ -71,6 +99,14 @@ export function injectStyles(): void {
       color: #f4f4f5 !important;
       letter-spacing: 0.01em;
     }
+    .${CHIP_CLASS} .tse-chip-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      max-width: 100%;
+      padding-inline-end: 2px;
+    }
     .tse-chip-dot {
       width: 6.5px;
       height: 6.5px;
@@ -78,6 +114,38 @@ export function injectStyles(): void {
       flex-shrink: 0;
       background: rgb(var(--tse-color));
       box-shadow: 0 0 5px rgb(var(--tse-color) / 0.7);
+    }
+
+    /* Task Progress / Remaining Badge */
+    .${PROG_CLASS} {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-inline-start: 6px;
+      margin-inline-end: 4px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.25;
+      white-space: nowrap;
+      flex-shrink: 0;
+      cursor: pointer;
+      user-select: none;
+      background: rgba(124, 92, 255, 0.18);
+      border: 1px solid rgba(124, 92, 255, 0.4);
+      color: #d8b4fe !important;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+      transition: background 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
+    }
+    .${PROG_CLASS}:hover {
+      background: rgba(124, 92, 255, 0.32);
+      border-color: rgba(124, 92, 255, 0.65);
+      color: #ffffff !important;
+      transform: scale(1.04);
+    }
+    .${PROG_CLASS}:active {
+      transform: scale(0.96);
     }
 
     /* Per-task Text Direction & Alignment (PRD §36.1) */
@@ -118,7 +186,12 @@ export function injectStyles(): void {
   document.head.appendChild(style);
 }
 
-function signature(info: AssignmentInfo | null, settings: Settings, textConfig?: TaskTextConfig | null): string {
+function signature(
+  info: AssignmentInfo | null,
+  settings: Settings,
+  textConfig?: TaskTextConfig | null,
+  progressNote?: string | null,
+): string {
   const parts: string[] = [];
   if (info) {
     parts.push(settings.colorMode, info.color, settings.showProjectName ? info.name : "", info.colorSource);
@@ -128,14 +201,25 @@ function signature(info: AssignmentInfo | null, settings: Settings, textConfig?:
   if (textConfig) {
     parts.push(textConfig.direction ?? "auto", textConfig.alignment ?? "none");
   }
+  if (progressNote) {
+    parts.push(progressNote);
+  }
   return parts.join("|");
 }
 
 /** React may re-render parts of the row and drop our nodes — detect that so we re-add them. */
-function isIntact(row: HTMLElement, settings: Settings, hasInfo: boolean): boolean {
+function isIntact(
+  row: HTMLElement,
+  settings: Settings,
+  hasInfo: boolean,
+  hasProgress: boolean,
+): boolean {
   if (hasInfo) {
     if (settings.colorMode === "strip" && !row.querySelector(`:scope > .${STRIP_CLASS}`)) return false;
     if (settings.showProjectName && !row.querySelector(`:scope > .GoalRow-content > .${CHIP_CLASS}`)) return false;
+  }
+  if (hasProgress) {
+    if (!row.querySelector(`:scope > .GoalRow-content > .${PROG_CLASS}`)) return false;
   }
   return true;
 }
@@ -143,6 +227,7 @@ function isIntact(row: HTMLElement, settings: Settings, hasInfo: boolean): boole
 function clearRow(row: HTMLElement): void {
   row.querySelectorAll(`:scope > .${STRIP_CLASS}`).forEach((el) => el.remove());
   row.querySelectorAll(`:scope > .GoalRow-content > .${CHIP_CLASS}`).forEach((el) => el.remove());
+  row.querySelectorAll(`:scope > .GoalRow-content > .${PROG_CLASS}`).forEach((el) => el.remove());
   delete row.dataset.tseSig;
   delete row.dataset.tseMode;
   delete row.dataset.tseDir;
@@ -152,14 +237,16 @@ function clearRow(row: HTMLElement): void {
 
 /** Converge one goal row to the desired indicator state (null info = no project). */
 export function applyBadge(
+  goalId: string,
   row: HTMLElement,
   info: AssignmentInfo | null,
   settings: Settings,
   textConfig?: TaskTextConfig | null,
+  progressNote?: string | null,
 ): void {
-  const sig = signature(info, settings, textConfig);
+  const sig = signature(info, settings, textConfig, progressNote);
   const current = row.dataset.tseSig ?? "";
-  if (current === sig && isIntact(row, settings, Boolean(info))) return;
+  if (current === sig && isIntact(row, settings, Boolean(info), Boolean(progressNote))) return;
 
   clearRow(row);
 
@@ -173,6 +260,29 @@ export function applyBadge(
 
   row.dataset.tseSig = sig;
 
+  const content = row.querySelector<HTMLElement>(":scope > .GoalRow-content");
+
+  // Render Progress / Remaining Badge if set
+  if (progressNote && content) {
+    const progBadge = document.createElement("span");
+    progBadge.className = PROG_CLASS;
+    const icon = progressNote.includes("⏳") || progressNote.includes("✓") || progressNote.includes("%") ? "" : "⏳ ";
+    progBadge.textContent = `${icon}${progressNote}`;
+    progBadge.title = `Progress: ${progressNote} (click to edit or clear)`;
+    progBadge.onclick = (e) => {
+      e.stopPropagation();
+      openProgressPopover(goalId, progBadge);
+    };
+
+    // Insert right after the title element if available, or prepend/append
+    const titleEl = content.querySelector(".GoalRow-title, [class*='title' i], [class*='text' i]");
+    if (titleEl && titleEl.nextSibling) {
+      content.insertBefore(progBadge, titleEl.nextSibling);
+    } else {
+      content.appendChild(progBadge);
+    }
+  }
+
   if (!info) return;
 
   const [r, g, b] = hexToRgbTriple(info.color);
@@ -185,21 +295,17 @@ export function applyBadge(
     row.prepend(strip);
   }
 
-  if (settings.showProjectName && info.name) {
-    const content = row.querySelector<HTMLElement>(":scope > .GoalRow-content");
-    if (content) {
-      const chip = document.createElement("span");
-      chip.className = CHIP_CLASS;
-      // For sub-projects the badge shows the sub's own name; the full
-      // "root › … › leaf" path lives in the tooltip (user decision 2026-10-05).
-      chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
-      const dot = document.createElement("span");
-      dot.className = "tse-chip-dot";
-      const label = document.createElement("span");
-      label.dir = "auto";
-      label.textContent = info.name;
-      chip.append(dot, label);
-      content.appendChild(chip);
-    }
+  if (settings.showProjectName && info.name && content) {
+    const chip = document.createElement("span");
+    chip.className = CHIP_CLASS;
+    chip.title = `${info.path ?? info.name} (${info.source})${info.colorSource === "override" ? " • Custom color" : ""}`;
+    const dot = document.createElement("span");
+    dot.className = "tse-chip-dot";
+    const label = document.createElement("span");
+    label.className = "tse-chip-label";
+    label.dir = "auto";
+    label.textContent = info.name;
+    chip.append(dot, label);
+    content.appendChild(chip);
   }
 }

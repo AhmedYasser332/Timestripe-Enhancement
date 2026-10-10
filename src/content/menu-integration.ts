@@ -25,6 +25,7 @@ import { openTemplatesModal } from "./templates-modal";
 import { fillProjectFlyout, openProjectTreeModal } from "./project-tree-ui";
 import { pushAction } from "./history";
 import { toggleGoalWithTree } from "./selection-state";
+import { openProgressPopover } from "./progress-popover";
 import type { TaskTextConfig } from "../shared/types";
 
 const MENU_SIGNATURE = ["Duplicate", "Delete"];
@@ -742,6 +743,20 @@ function maybeInject(menu: Element): boolean {
     toggleGoalWithTree(goalId);
   });
   section.appendChild(selectRow);
+
+  // Progress / Remaining Note Row
+  const progRow = document.createElement("button");
+  progRow.type = "button";
+  progRow.className = "tse-menu-row";
+  const progLabel = document.createElement("span");
+  progLabel.textContent = "Progress / Note…";
+  progRow.appendChild(progLabel);
+  progRow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeNativeMenu();
+    openProgressPopover(goalId, progRow);
+  });
+  section.appendChild(progRow);
 
   // Insert cleanly at the top of the menu items (before the native color swatches / Assign)
   const firstChild = menu.firstElementChild;

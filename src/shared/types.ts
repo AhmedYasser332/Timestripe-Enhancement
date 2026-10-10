@@ -76,6 +76,7 @@ export interface SpaceData {
   taskColorOverrides?: Record<string, string>;
   templates?: GoalTemplate[];
   taskTextConfigs?: Record<string, TaskTextConfig>;
+  taskProgressNotes?: Record<string, string>;
 }
 
 export interface Settings {

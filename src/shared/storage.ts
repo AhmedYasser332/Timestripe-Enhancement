@@ -23,6 +23,7 @@ const DEFAULT_SPACE_DATA: SpaceData = {
   projects: [],
   taskProjectLinks: {},
   taskColorOverrides: {},
+  taskProgressNotes: {},
 };
 
 function spaceKey(spaceId: string): string {
@@ -51,12 +52,15 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
 
 export async function getSpaceData(spaceId: string): Promise<SpaceData> {
   const { [spaceKey(spaceId)]: data } = await chrome.storage.local.get(spaceKey(spaceId));
-  if (!data) return { ...DEFAULT_SPACE_DATA, projects: [], taskProjectLinks: {}, taskColorOverrides: {} };
+  if (!data) return { ...DEFAULT_SPACE_DATA, projects: [], taskProjectLinks: {}, taskColorOverrides: {}, taskProgressNotes: {} };
   const d = data as Partial<SpaceData>;
   return {
     projects: d.projects ?? [],
     taskProjectLinks: d.taskProjectLinks ?? {},
     taskColorOverrides: d.taskColorOverrides ?? {},
+    templates: d.templates ?? [],
+    taskTextConfigs: d.taskTextConfigs ?? {},
+    taskProgressNotes: d.taskProgressNotes ?? {},
   };
 }
 
@@ -91,6 +95,7 @@ export async function getAllStoredSpaceData(): Promise<Map<string, SpaceData>> {
         taskColorOverrides: d.taskColorOverrides ?? {},
         templates: d.templates ?? [],
         taskTextConfigs: d.taskTextConfigs ?? {},
+        taskProgressNotes: d.taskProgressNotes ?? {},
       });
     }
   }
@@ -264,6 +269,22 @@ export async function setTaskTextConfigs(
   });
 }
 
+export async function setTaskProgressNote(
+  spaceId: string,
+  goalId: string,
+  note: string | null,
+): Promise<void> {
+  await updateSpaceData(spaceId, (d) => {
+    const notes = { ...(d.taskProgressNotes ?? {}) };
+    if (!note || note.trim().length === 0 || note.trim() === "0") {
+      delete notes[goalId];
+    } else {
+      notes[goalId] = note.trim();
+    }
+    return { ...d, taskProgressNotes: notes };
+  });
+}
+
 export async function pruneOrphanedStorageData(aliveGoalIds?: Set<string>): Promise<{ prunedLinks: number; prunedOverrides: number; prunedTexts: number }> {
   const allProjects = await getAllProjects();
   const validProjectIds = new Set(allProjects.map((p) => p.id));
@@ -314,12 +335,23 @@ export async function pruneOrphanedStorageData(aliveGoalIds?: Set<string>): Prom
       nextTexts[goalId] = cfg;
     }
 
+    // 4. Prune taskProgressNotes
+    const nextNotes: Record<string, string> = {};
+    for (const [goalId, note] of Object.entries(data.taskProgressNotes ?? {})) {
+      if (aliveGoalIds && !aliveGoalIds.has(goalId)) {
+        changed = true;
+        continue;
+      }
+      nextNotes[goalId] = note;
+    }
+
     if (changed) {
       await updateSpaceData(sId, (d) => ({
         ...d,
         taskProjectLinks: nextLinks,
         taskColorOverrides: nextOverrides,
         taskTextConfigs: nextTexts,
+        taskProgressNotes: nextNotes,
       }));
     }
   }

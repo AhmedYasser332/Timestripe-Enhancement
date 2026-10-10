@@ -6,6 +6,7 @@ import { observeGoalList, scanGoalRows } from "./adapter";
 import { captureMenuTarget, scanForNativeMenus } from "./menu-integration";
 import {
   checkUnknownGoals,
+  getTaskProgressNotes,
   getTaskTextConfigs,
   getViewState,
   initLiveState,
@@ -17,10 +18,12 @@ import { initGlobalHistoryShortcuts } from "./history";
 import { scanAndInjectEditorToolbar } from "./editor-toolbar";
 import { initDashboardShortcut, injectSidebarButton } from "./dashboard-modal";
 import { initAutoComplete } from "./auto-complete";
+import { initProgressShortcuts } from "./progress-popover";
 
 function renderAll(): void {
   const viewState = getViewState();
   const textConfigs = getTaskTextConfigs();
+  const progressNotes = getTaskProgressNotes();
   const rows = scanGoalRows();
   const visibleIds: string[] = [];
   const domParents: Array<{ goalId: string; parentId: string }> = [];
@@ -30,7 +33,14 @@ function renderAll(): void {
     if (domParentId) {
       domParents.push({ goalId, parentId: domParentId });
     }
-    applyBadge(row, viewState.assignments[goalId] ?? null, viewState.settings, textConfigs[goalId]);
+    applyBadge(
+      goalId,
+      row,
+      viewState.assignments[goalId] ?? null,
+      viewState.settings,
+      textConfigs[goalId],
+      progressNotes[goalId],
+    );
   }
 
   if (domParents.length > 0) {
@@ -52,6 +62,7 @@ initGlobalHistoryShortcuts();
 initDashboardShortcut();
 injectSidebarButton();
 initAutoComplete();
+initProgressShortcuts();
 
 // Live reactive state: when settings change (strip ↔ full, project name toggle)
 // or projects/assignments change, this callback runs IMMEDIATELY.

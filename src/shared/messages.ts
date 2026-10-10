@@ -63,6 +63,11 @@ export type SetTaskTextConfigMessage = {
   goalIds: string[];
   patch: Partial<TaskTextConfig> | null;
 };
+export type SetTaskProgressNoteMessage = {
+  type: "SET_TASK_PROGRESS_NOTE";
+  goalId: string;
+  note: string | null;
+};
 export type AutoCompleteParentMessage = {
   type: "AUTO_COMPLETE_PARENT";
   goalId: string;
@@ -138,6 +143,7 @@ export type BgMessage =
   | DeleteTemplateMessage
   | ApplyTemplateMessage
   | SetTaskTextConfigMessage
+  | SetTaskProgressNoteMessage
   | AutoCompleteParentMessage
   | UncheckAllDescendantsMessage
   | CheckSubgoalsStatusMessage
@@ -186,6 +192,7 @@ export type BgResponseMap = {
   DELETE_TEMPLATE: null;
   APPLY_TEMPLATE: SmartDuplicateResult;
   SET_TASK_TEXT_CONFIG: null;
+  SET_TASK_PROGRESS_NOTE: null;
   AUTO_COMPLETE_PARENT: AutoCompleteParentResult;
   UNCHECK_ALL_DESCENDANTS: UncheckAllDescendantsResult;
   CHECK_SUBGOALS_STATUS: CheckSubgoalsStatusResult;

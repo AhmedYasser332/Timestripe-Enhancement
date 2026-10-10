@@ -29,6 +29,7 @@ import {
   setApiKey,
   setSettings,
   setTaskColorOverrides,
+  setTaskProgressNote,
   setTaskProjectLinks,
   setTaskTextConfigs,
   updateSpaceData,
@@ -556,6 +557,12 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
   SET_TASK_TEXT_CONFIG: async (msg) => {
     const spaceId = await requireActiveSpaceId();
     await setTaskTextConfigs(spaceId, msg.goalIds, msg.patch);
+    await broadcastStateChanged();
+    return null;
+  },
+  SET_TASK_PROGRESS_NOTE: async (msg) => {
+    const spaceId = await requireActiveSpaceId();
+    await setTaskProgressNote(spaceId, msg.goalId, msg.note);
     await broadcastStateChanged();
     return null;
   },
