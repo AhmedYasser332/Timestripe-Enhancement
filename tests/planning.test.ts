@@ -91,16 +91,20 @@ describe("executeBulkDelete: failure injection", () => {
     expect(outcome.deleted).toEqual([]);
   });
 
-  it("reports a mid-run delete failure without claiming the failed goal was deleted", async () => {
+  it("stops at a failed delete and does not claim the failed goal was deleted", async () => {
     const plan = planBulkDelete(["d1", "w2"], tree);
-    const outcome = await executeBulkDelete(plan, {
-      reparent: async () => {},
-      remove: async (id) => {
-        if (id === "d1") throw new Error("HTTP 503");
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async () => {},
+        remove: async (id) => {
+          if (id === "d1") throw new Error("HTTP 503");
+        },
       },
-    });
-    expect(outcome.deleted).toEqual(["w2"]);
-    expect(outcome.failed.map((f) => f.goalId)).toEqual(["d1"]);
+      new Map(tree.map((g) => [g.id, g.parent_id])),
+    );
+    expect(outcome.deleted).toEqual([]);
+    expect(outcome.failed[0]).toEqual({ goalId: "d1", error: "HTTP 503" });
   });
 });
 
@@ -229,5 +233,140 @@ describe("backupProblem: import validation", () => {
     expect(
       backupProblem({ schemaVersion: 2, data: {}, perSpace: { sp1: { projects: "bad" } } }),
     ).toMatch(/space sp1/);
+  });
+});
+
+describe("executeBulkDelete: child removal fails, ancestor must not be removed", () => {
+  it("stops before deleting the month when the week's delete fails", async () => {
+    // Month and week are both selected; deleting the week fails.
+    const plan = planBulkDelete(["m", "w1"], tree);
+    const store = makeStore(tree);
+    const removed: string[] = [];
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async (goalId, parentId) => {
+          store.alive.get(goalId)!.parent_id = parentId;
+        },
+        remove: async (goalId) => {
+          removed.push(goalId);
+          if (goalId === "w1") throw new Error("HTTP 503 on week");
+          store.removeSubtree(goalId);
+        },
+      },
+      new Map(tree.map((g) => [g.id, g.parent_id])),
+    );
+    expect(removed).toEqual(["w1"]);
+    expect(outcome.abortReason).toContain("Stopped after removal of w1 failed");
+    expect(store.alive.has("m")).toBe(true);
+    expect(store.alive.has("w1")).toBe(true);
+  });
+
+  it("marks goals after the failed removal as not attempted", async () => {
+    const plan = { selected: ["d1", "w1", "m"], reparent: [] };
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async () => {},
+        remove: async (goalId) => {
+          if (goalId === "d1") throw new Error("HTTP 500");
+        },
+      },
+      new Map(),
+    );
+    expect(outcome.deleted).toEqual([]);
+    expect(outcome.failed.map((f) => [f.goalId, f.error])).toEqual([
+      ["d1", "HTTP 500"],
+      ["w1", "not attempted"],
+      ["m", "not attempted"],
+    ]);
+  });
+});
+
+describe("executeBulkDelete: restoring moves when a later move fails", () => {
+  it("returns an already-moved unselected child to its original parent", async () => {
+    const plan = planBulkDelete(["w1"], tree);
+    // Protective moves for w1: d1 then d2. Move #2 fails, so d1 must be put back under w1.
+    const current = new Map(tree.map((g) => [g.id, g.parent_id]));
+    let calls = 0;
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async (goalId, parentId) => {
+          calls++;
+          if (calls === 2) throw new Error("HTTP 500 on second move");
+          current.set(goalId, parentId);
+        },
+        remove: async () => {
+          throw new Error("must not run");
+        },
+      },
+      new Map(tree.map((g) => [g.id, g.parent_id])),
+    );
+    expect(outcome.abortReason).toContain("Could not protect");
+    expect(outcome.restored).toEqual(["d1"]);
+    expect(outcome.restoreFailed).toEqual([]);
+    expect(current.get("d1")).toBe("w1");
+  });
+
+  it("reports goals whose original parent could not be restored", async () => {
+    const plan = { selected: ["w1"], reparent: [
+      { goalId: "d1", parentId: "m" },
+      { goalId: "d2", parentId: "m" },
+    ] };
+    const parents = new Map(tree.map((g) => [g.id, g.parent_id]));
+    const outcome = await executeBulkDelete(
+      plan,
+      {
+        reparent: async (goalId, parentId) => {
+          if (goalId === "d2") throw new Error("HTTP 500");
+          if (parentId === "w1" && goalId === "d1") throw new Error("restore HTTP 503");
+        },
+        remove: async () => {},
+      },
+      parents,
+    );
+    expect(outcome.abortReason).toContain("Could not protect");
+    expect(outcome.restoreFailed.map((f) => f.goalId)).toEqual(["d1"]);
+  });
+});
+
+import { commitMetadataAtomically } from "../src/shared/planning";
+
+describe("commitMetadataAtomically: storage failure during duplicate metadata", () => {
+  const emptySpace = (): SpaceData => ({ projects: [], taskProjectLinks: {}, taskColorOverrides: {} });
+
+  it("undoes the first space's writes when the second space write fails", async () => {
+    const stores: Record<string, SpaceData> = { sp1: emptySpace(), sp2: emptySpace() };
+    const writes = new Map([
+      ["sp1", { links: { new1: { projectId: "p" } }, colors: { new1: "#fff" } }],
+      ["sp2", { links: { new2: { projectId: "p" } }, colors: {} }],
+    ]);
+    const update = async (spaceId: string, mutate: (d: SpaceData) => SpaceData) => {
+      if (spaceId === "sp2" && stores.sp2.taskProjectLinks.new2 === undefined && Object.keys(stores.sp1.taskProjectLinks).length > 0) {
+        throw new Error("storage quota exceeded");
+      }
+      stores[spaceId] = mutate(stores[spaceId]);
+    };
+
+    await expect(
+      commitMetadataAtomically(writes, new Set(["new1", "new2"]), update),
+    ).rejects.toThrow("storage quota exceeded");
+
+    expect(stores.sp1.taskProjectLinks).toEqual({});
+    expect(stores.sp1.taskColorOverrides).toEqual({});
+  });
+
+  it("writes every space when nothing fails", async () => {
+    const stores: Record<string, SpaceData> = { sp1: emptySpace() };
+    await commitMetadataAtomically(
+      new Map([["sp1", { links: { g: { projectId: "p" } }, colors: { g: "#abc" } }]]),
+      new Set(["g"]),
+      async (spaceId, mutate) => {
+        stores[spaceId] = mutate(stores[spaceId]);
+      },
+    );
+    expect(stores.sp1.taskProjectLinks).toEqual({ g: { projectId: "p" } });
+    expect(stores.sp1.taskColorOverrides).toEqual({ g: "#abc" });
   });
 });

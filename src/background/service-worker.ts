@@ -8,8 +8,10 @@ import {
   backupProblem,
   executeBulkDelete,
   planBulkDelete,
+  commitMetadataAtomically,
   planPrune,
   withCreationRollback,
+  type SpaceWrite,
 } from "../shared/planning";
 import { err, ok } from "../shared/messages";
 import type {
@@ -227,23 +229,29 @@ async function bulkDeleteGoals(goalIds: string[]): Promise<BulkDeleteResult> {
   );
   const missing = goalIds.filter((id) => !byId.has(id));
 
-  const outcome = await executeBulkDelete(plan, {
-    reparent: async (goalId, parentId) => {
-      await client.updateGoal(goalId, { parent_id: parentId });
+  const originalParents = new Map([...byId.values()].map(({ goal }) => [goal.id, goal.parent_id] as const));
+  const outcome = await executeBulkDelete(
+    plan,
+    {
+      reparent: async (goalId, parentId) => {
+        await client.updateGoal(goalId, { parent_id: parentId });
+      },
+      remove: (goalId) => client.deleteGoal(goalId),
     },
-    remove: (goalId) => client.deleteGoal(goalId),
-  });
+    originalParents,
+  );
 
   await purgeGoalIdsEverywhere(outcome.deleted);
   await broadcastStateChanged();
 
   const errors = [
     ...(outcome.abortReason ? [outcome.abortReason] : []),
-    ...outcome.failed.map((f) => `${f.goalId}: ${f.error}`),
+    ...outcome.failed.filter((f) => f.error !== "not attempted").map((f) => `${f.goalId}: ${f.error}`),
+    ...outcome.restoreFailed.map((f) => `restore ${f.goalId} to its original parent failed: ${f.error}`),
     ...missing.map((id) => `${id}: not found`),
   ];
-  const failed = (outcome.abortReason ? plan.selected.length : outcome.failed.length) + missing.length;
-  return { completed: outcome.deleted.length, failed, errors };
+  const notDeleted = plan.selected.length - outcome.deleted.length;
+  return { completed: outcome.deleted.length, failed: notDeleted + missing.length, errors };
 }
 
 async function smartDuplicate(
@@ -358,30 +366,23 @@ async function smartDuplicate(
         }
       }
     }
+    // Metadata is part of the transaction: if it fails, the created goals are rolled back too.
+    if (options.copyProject || options.copyColors) {
+      const stored = await getAllStoredSpaceData();
+      const writes = new Map<string, SpaceWrite>();
+      for (const [oldId, newId] of oldToNew) {
+        const target = newSpaceOf.get(newId)!;
+        const srcData = stored.get(byId.get(oldId)!.spaceId);
+        const link = srcData?.taskProjectLinks[oldId];
+        const color = srcData?.taskColorOverrides?.[oldId];
+        const bucket = writes.get(target) ?? { links: {}, colors: {} };
+        if (options.copyProject && link) bucket.links[newId] = link;
+        if (options.copyColors && color) bucket.colors[newId] = color;
+        writes.set(target, bucket);
+      }
+      await commitMetadataAtomically(writes, new Set(oldToNew.values()), updateSpaceData);
+    }
   }, (id) => client.deleteGoal(id));
-
-  if (options.copyProject || options.copyColors) {
-    const stored = await getAllStoredSpaceData();
-    const writes = new Map<string, { links: Record<string, TaskProjectLink>; colors: Record<string, string> }>();
-    for (const [oldId, newId] of oldToNew) {
-      const target = newSpaceOf.get(newId)!;
-      const src = byId.get(oldId)!.spaceId;
-      const srcData = stored.get(src);
-      const link = srcData?.taskProjectLinks[oldId];
-      const color = srcData?.taskColorOverrides?.[oldId];
-      const bucket = writes.get(target) ?? { links: {}, colors: {} };
-      if (options.copyProject && link) bucket.links[newId] = link;
-      if (options.copyColors && color) bucket.colors[newId] = color;
-      writes.set(target, bucket);
-    }
-    for (const [spaceId, w] of writes) {
-      await updateSpaceData(spaceId, (d) => ({
-        ...d,
-        taskProjectLinks: { ...d.taskProjectLinks, ...w.links },
-        taskColorOverrides: { ...(d.taskColorOverrides ?? {}), ...w.colors },
-      }));
-    }
-  }
 
   await broadcastStateChanged();
   return { newRootId: newRootIds[0] ?? "", newRootIds, totalCreated: createdIds.length };

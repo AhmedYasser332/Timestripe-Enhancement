@@ -789,6 +789,8 @@ export async function openSchedulerModal(selectedGoalIds: string[]): Promise<voi
   };
 
   const runAttempt = async (): Promise<void> => {
+    // Read the current picker value for every pending row: a date edited after a failed attempt wins.
+    for (const id of pending.keys()) pending.set(id, dateState.get(id) ?? null);
     const updates = Array.from(pending.entries()).map(([goalId, date]) => ({ goalId, date }));
     if (updates.length === 0) return;
     saveBtn.disabled = true;

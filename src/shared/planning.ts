@@ -70,17 +70,51 @@ export interface DeleteOps {
 export interface DeleteOutcome {
   deleted: string[];
   failed: Array<{ goalId: string; error: string }>;
+  /** Moves that were applied and then reverted because the batch stopped. */
+  restored: string[];
+  /** Moves that could not be reverted; these goals sit in a new place and need manual review. */
+  restoreFailed: Array<{ goalId: string; error: string }>;
   abortReason: string | null;
 }
 
-export async function executeBulkDelete(plan: BulkDeletePlan, ops: DeleteOps): Promise<DeleteOutcome> {
+/**
+ * Runs the protective moves, then removes selected goals deepest-first. The batch stops at
+ * the first failure of either kind:
+ * - a failed move: earlier moves are rolled back to their original parents;
+ * - a failed removal: no further removal runs, so an ancestor can never cascade over a child
+ *   whose own delete was not confirmed.
+ */
+export async function executeBulkDelete(
+  plan: BulkDeletePlan,
+  ops: DeleteOps,
+  originalParents: Map<string, string | null>,
+): Promise<DeleteOutcome> {
+  const applied: string[] = [];
+  const restored: string[] = [];
+  const restoreFailed: DeleteOutcome["restoreFailed"] = [];
+
+  const rollbackMoves = async (): Promise<void> => {
+    for (const goalId of [...applied].reverse()) {
+      try {
+        await ops.reparent(goalId, originalParents.get(goalId) ?? null);
+        restored.push(goalId);
+      } catch (e) {
+        restoreFailed.push({ goalId, error: errorMessage(e) });
+      }
+    }
+  };
+
   for (const move of plan.reparent) {
     try {
       await ops.reparent(move.goalId, move.parentId);
+      applied.push(move.goalId);
     } catch (e) {
+      await rollbackMoves();
       return {
         deleted: [],
         failed: plan.selected.map((goalId) => ({ goalId, error: "not attempted" })),
+        restored,
+        restoreFailed,
         abortReason: `Could not protect unselected subgoal ${move.goalId}: ${errorMessage(e)}`,
       };
     }
@@ -88,15 +122,26 @@ export async function executeBulkDelete(plan: BulkDeletePlan, ops: DeleteOps): P
 
   const deleted: string[] = [];
   const failed: DeleteOutcome["failed"] = [];
-  for (const goalId of plan.selected) {
+  for (let i = 0; i < plan.selected.length; i++) {
+    const goalId = plan.selected[i];
     try {
       await ops.remove(goalId);
       deleted.push(goalId);
     } catch (e) {
       failed.push({ goalId, error: errorMessage(e) });
+      // Stop here: removing any ancestor now could cascade over this goal's subtree.
+      for (const rest of plan.selected.slice(i + 1)) failed.push({ goalId: rest, error: "not attempted" });
+      await rollbackMoves();
+      return {
+        deleted,
+        failed,
+        restored,
+        restoreFailed,
+        abortReason: `Stopped after removal of ${goalId} failed: ${errorMessage(e)}`,
+      };
     }
   }
-  return { deleted, failed, abortReason: null };
+  return { deleted, failed, restored, restoreFailed, abortReason: null };
 }
 
 function partition<V>(
@@ -225,4 +270,46 @@ export function backupProblem(payload: unknown): string | null {
     }
   }
   return null;
+}
+
+export type SpaceWrite = {
+  links: Record<string, { projectId: string }>;
+  colors: Record<string, string>;
+};
+
+/**
+ * Commits project links and colors per space. If any space write fails, every write already
+ * committed is undone for the same goal ids, and the original error is rethrown so the caller's
+ * creation rollback still runs.
+ */
+export async function commitMetadataAtomically(
+  writes: Map<string, SpaceWrite>,
+  newIds: Set<string>,
+  update: (
+    spaceId: string,
+    mutate: (d: SpaceData) => SpaceData,
+  ) => Promise<unknown>,
+): Promise<void> {
+  const committed: string[] = [];
+  try {
+    for (const [spaceId, w] of writes) {
+      await update(spaceId, (d) => ({
+        ...d,
+        taskProjectLinks: { ...d.taskProjectLinks, ...w.links },
+        taskColorOverrides: { ...(d.taskColorOverrides ?? {}), ...w.colors },
+      }));
+      committed.push(spaceId);
+    }
+  } catch (e) {
+    for (const spaceId of committed) {
+      await update(spaceId, (d) => ({
+        ...d,
+        taskProjectLinks: Object.fromEntries(Object.entries(d.taskProjectLinks).filter(([id]) => !newIds.has(id))),
+        taskColorOverrides: Object.fromEntries(
+          Object.entries(d.taskColorOverrides ?? {}).filter(([id]) => !newIds.has(id)),
+        ),
+      })).catch(() => {});
+    }
+    throw e;
+  }
 }
