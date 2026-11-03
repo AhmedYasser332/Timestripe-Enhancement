@@ -5,6 +5,9 @@ dist/
 .env.local
 .env.*.local
 
+.zcode/plans/
+.zcode/
+
 *.log
 .DS_Store
 Thumbs.db

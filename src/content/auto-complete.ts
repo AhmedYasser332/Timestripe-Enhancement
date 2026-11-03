@@ -14,7 +14,7 @@ import {
   isGoalChecked,
   scanGoalRows,
 } from "./adapter";
-import { getGoalParents, getSettings } from "./state";
+import { getGoalParents, getSettings, getTaskProgressNotes, optimisticProgressNote } from "./state";
 import { sendToBg } from "./messaging";
 import { showToast } from "./toast";
 import type {
@@ -194,22 +194,31 @@ function showUncheckParentPopover(
       }
     }
 
-    // 3. Reverse cascade uncheck any higher ancestors in DOM
+    // 2. Reverse cascade uncheck any higher ancestors in DOM
     uncheckDomCascade(goalId);
+    optimisticProgressNote(goalId, null);
 
     // 4. Background service worker unchecks all descendants recursively on Timestripe API
     void sendToBg<UncheckAllDescendantsResult>({
       type: "UNCHECK_ALL_DESCENDANTS",
       goalId,
     }).then((res) => {
-      if (res?.ok && res.data?.uncheckedIds) {
-        for (const uId of res.data.uncheckedIds) {
-          const uWrapper = document.querySelector<HTMLElement>(
-            `.GoalRowWrapper[data-draggable-id*='::goal:${uId}']`,
-          );
-          if (uWrapper && isGoalChecked(uWrapper)) {
-            const uCb = getNativeGoalCheckbox(uWrapper);
-            if (uCb) triggerNativeCheckboxClick(uCb);
+      if (res?.ok && res.data) {
+        optimisticProgressNote(goalId, null);
+        if (res.data.clearedParentNoteIds) {
+          for (const cId of res.data.clearedParentNoteIds) {
+            optimisticProgressNote(cId, null);
+          }
+        }
+        if (res.data.uncheckedIds) {
+          for (const uId of res.data.uncheckedIds) {
+            const uWrapper = document.querySelector<HTMLElement>(
+              `.GoalRowWrapper[data-draggable-id*='::goal:${uId}']`,
+            );
+            if (uWrapper && isGoalChecked(uWrapper)) {
+              const uCb = getNativeGoalCheckbox(uWrapper);
+              if (uCb) triggerNativeCheckboxClick(uCb);
+            }
           }
         }
       }
@@ -293,6 +302,37 @@ function parseSubgoalCountFromDom(parentWrapper: HTMLElement): number | null {
   return null;
 }
 
+/**
+ * Update the optimistic progress fraction (e.g. 1/7 -> 2/7) for a parent goal.
+ * If done drops to 0, clears the badge (null).
+ */
+function updateOptimisticParentProgress(
+  parentId: string,
+  delta: 1 | -1,
+  totalHint?: number | null,
+): void {
+  const currentNotes = getTaskProgressNotes();
+  const existing = currentNotes[parentId];
+  let done = 0;
+  let total = totalHint ?? null;
+
+  if (existing) {
+    const m = existing.match(/^(\d+)\/(\d+)$/);
+    if (m) {
+      done = parseInt(m[1], 10);
+      if (!total || total <= 0) {
+        total = parseInt(m[2], 10);
+      }
+    }
+  }
+
+  if (total && total > 0) {
+    const nextDone = Math.max(0, Math.min(total, done + delta));
+    const nextNote = nextDone === 0 ? null : `${nextDone}/${total}`;
+    optimisticProgressNote(parentId, nextNote);
+  }
+}
+
 /** Find all wrappers on screen matching a given goal ID (case-insensitive & cross-horizon). */
 function findWrappersForGoal(goalId: string): HTMLElement[] {
   const targetId = goalId.toLowerCase();
@@ -344,6 +384,7 @@ function checkDomCascade(goalId: string): void {
     );
 
     const subCount = parseSubgoalCountFromDom(primaryParentWrapper);
+    updateOptimisticParentProgress(parentId, 1, subCount ?? (childRows.length > 0 ? childRows.length : null));
 
     let isComplete = false;
     if (subCount === 1) {
@@ -397,6 +438,9 @@ function uncheckDomCascade(goalId: string): void {
     if (!parentId) break;
 
     const parentWrappers = findWrappersForGoal(parentId);
+    const subCount = parentWrappers.length > 0 ? parseSubgoalCountFromDom(parentWrappers[0]) : null;
+    updateOptimisticParentProgress(parentId, -1, subCount);
+
     for (const pWrapper of parentWrappers) {
       if (isGoalChecked(pWrapper)) {
         const parentCb = getNativeGoalCheckbox(pWrapper);
@@ -433,7 +477,12 @@ function handleCheckboxAction(
       checked: false,
     }).then((res) => {
       if (!res?.ok || !res.data) return;
-      const { parentIdsToUncheck } = res.data;
+      const { parentIdsToUncheck, updatedProgressNotes } = res.data;
+      if (updatedProgressNotes && updatedProgressNotes.length > 0) {
+        for (const { goalId: gid, note } of updatedProgressNotes) {
+          optimisticProgressNote(gid, note);
+        }
+      }
       if (parentIdsToUncheck && parentIdsToUncheck.length > 0) {
         for (const pId of parentIdsToUncheck) {
           const pWrappers = findWrappersForGoal(pId);
@@ -458,7 +507,12 @@ function handleCheckboxAction(
       checked: true,
     }).then((res) => {
       if (!res?.ok || !res.data) return;
-      const { parentIdsToCheck } = res.data;
+      const { parentIdsToCheck, updatedProgressNotes } = res.data;
+      if (updatedProgressNotes && updatedProgressNotes.length > 0) {
+        for (const { goalId: gid, note } of updatedProgressNotes) {
+          optimisticProgressNote(gid, note);
+        }
+      }
       if (parentIdsToCheck && parentIdsToCheck.length > 0) {
         for (const pId of parentIdsToCheck) {
           const pWrappers = findWrappersForGoal(pId);

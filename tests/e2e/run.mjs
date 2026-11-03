@@ -424,26 +424,34 @@ await step("T15 anchor button opens the native-style calendar", async () => {
   await page.waitForSelector(".tse-cal-pop", { timeout: 3000 });
   const year = await page.locator(".tse-cal-navrow .tse-cal-navlabel").first().textContent();
   const month = await page.locator(".tse-cal-navrow .tse-cal-navlabel").nth(1).textContent();
-  assert(year === "2026", `year should be 2026, got ${year}`);
-  assert(month === "October", `month should be October, got ${month}`);
+  const today = new Date();
+  const expectedYear = String(today.getFullYear());
+  const expectedMonth = today.toLocaleString("en-US", { month: "long" });
+  assert(year === expectedYear, `year should be ${expectedYear}, got ${year}`);
+  assert(month === expectedMonth, `month should be ${expectedMonth}, got ${month}`);
   const wk = await page.locator(".tse-cal-wk").nth(1).textContent();
   assert(/^W\d+$/.test(wk ?? ""), `week rows should render W##, got "${wk}"`);
 });
 
 await step("T16 picking a day updates the anchor label", async () => {
-  await page.click(".tse-cal-day[data-date='2026-10-15']");
+  const today = new Date();
+  const monthShort = today.toLocaleString("en-US", { month: "short" });
+  const targetDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-15`;
+  await page.click(`.tse-cal-day[data-date='${targetDate}']`);
   await sleep(150);
   const label = await page.locator(".tse-sched-anchor-btn").textContent();
-  assert(label.includes("Oct 15"), `anchor should show Oct 15, got "${label}"`);
+  assert(label.includes(`${monthShort} 15`), `anchor should show ${monthShort} 15, got "${label}"`);
 });
 
 await step("T17 'One per week' distributes weekly from the anchor", async () => {
   await page.click(".tse-sched-quick-btn:has-text('One per week')");
   await sleep(150);
+  const today = new Date();
+  const monthShort = today.toLocaleString("en-US", { month: "short" });
   const first = await page.locator(".tse-sched-row").first().locator(".tse-sched-date-btn").textContent();
   const second = await page.locator(".tse-sched-row").nth(1).locator(".tse-sched-date-btn").textContent();
-  assert(first.includes("Oct 15"), `first row should be Oct 15, got "${first}"`);
-  assert(second.includes("Oct 22"), `second row should be Oct 22, got "${second}"`);
+  assert(first.includes(`${monthShort} 15`), `first row should be ${monthShort} 15, got "${first}"`);
+  assert(second.includes(`${monthShort} 22`), `second row should be ${monthShort} 22, got "${second}"`);
 });
 
 await step("T18 per-row calendar quick pill 'tomorrow' works", async () => {

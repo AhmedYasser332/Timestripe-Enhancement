@@ -545,6 +545,17 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
 
     const parentIdsToCheck: string[] = [];
     const parentIdsToUncheck: string[] = [];
+    const updatedProgressNotes: Array<{ goalId: string; note: string | null }> = [];
+
+    const isGoalDone = (g: TSGoal): boolean => {
+      if (g.id === msg.goalId) return msg.checked;
+      if (g.checked) return true;
+      const kids = childrenByParent.get(g.id);
+      if (kids && kids.length > 0) {
+        return kids.every((k) => isGoalDone(k));
+      }
+      return false;
+    };
 
     if (msg.checked) {
       // =======================================================================
@@ -555,16 +566,6 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       //   3. OR (g has subgoals and 100% of its subgoals are complete!)
       // If and only if 100% of the subgoals of an ancestor are checked, check it!
       // =======================================================================
-      const isGoalDone = (g: TSGoal): boolean => {
-        if (g.id === msg.goalId) return true;
-        if (g.checked) return true;
-        const kids = childrenByParent.get(g.id);
-        if (kids && kids.length > 0) {
-          return kids.every((k) => isGoalDone(k));
-        }
-        return false;
-      };
-
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
         let parent = byId.get(currParentId);
@@ -584,8 +585,20 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         const subgoals = childrenByParent.get(currParentId) ?? [];
         if (subgoals.length === 0) break;
 
+        // Auto progress fraction: calculate done / total
+        const total = subgoals.length;
+        const doneCount = subgoals.filter((s) => isGoalDone(s)).length;
+        const note = doneCount === 0 ? null : `${doneCount}/${total}`;
+        const spaceId = parent.space_id ?? (await requireActiveSpaceId());
+        try {
+          await setTaskProgressNote(spaceId, parent.id, note);
+          updatedProgressNotes.push({ goalId: parent.id, note });
+        } catch (err) {
+          console.warn("[TSE] failed to set progress note", parent.id, err);
+        }
+
         // Check if every single subgoal under this parent is checked
-        const allDone = subgoals.every((s) => isGoalDone(s));
+        const allDone = doneCount === total;
         if (allDone) {
           if (!parent.checked) {
             try {
@@ -607,7 +620,7 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       // =======================================================================
       // UNCHECK: Walk UP ancestors (Full reverse cascade).
       // Since this subgoal is now unchecked, NO ancestor above it can be complete!
-      // Ensure all ancestors are marked unchecked!
+      // Ensure all ancestors are marked unchecked and their progress notes updated!
       // =======================================================================
       let currParentId: string | null = target.parent_id;
       while (currParentId) {
@@ -625,6 +638,20 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
         }
         if (!parent) break;
 
+        const subgoals = childrenByParent.get(currParentId) ?? [];
+        if (subgoals.length > 0) {
+          const total = subgoals.length;
+          const doneCount = subgoals.filter((s) => isGoalDone(s)).length;
+          const note = doneCount === 0 ? null : `${doneCount}/${total}`;
+          const spaceId = parent.space_id ?? (await requireActiveSpaceId());
+          try {
+            await setTaskProgressNote(spaceId, parent.id, note);
+            updatedProgressNotes.push({ goalId: parent.id, note });
+          } catch (err) {
+            console.warn("[TSE] failed to update progress note on uncheck", parent.id, err);
+          }
+        }
+
         if (parent.checked) {
           try {
             await client.updateGoal(parent.id, { checked: false });
@@ -638,11 +665,15 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
       }
     }
 
-    if (parentIdsToCheck.length > 0 || parentIdsToUncheck.length > 0) {
+    if (
+      parentIdsToCheck.length > 0 ||
+      parentIdsToUncheck.length > 0 ||
+      updatedProgressNotes.length > 0
+    ) {
       await broadcastStateChanged();
     }
 
-    return { parentIdsToCheck, parentIdsToUncheck };
+    return { parentIdsToCheck, parentIdsToUncheck, updatedProgressNotes };
   },
   UNCHECK_ALL_DESCENDANTS: async (msg) => {
     let client: TimestripeApi;
@@ -696,7 +727,20 @@ const handlers: { [K in keyof BgResponseMap]?: (msg: Extract<BgMessage, { type: 
     // Also uncheck the parent goal itself on Timestripe API
     await client.updateGoal(msg.goalId, { checked: false }).catch(() => {});
 
-    return { success: true, uncheckedIds };
+    // Clear progress notes for the parent and all affected descendants
+    const targetGoal = goals.find((g) => g.id === msg.goalId);
+    const spaceId = targetGoal?.space_id ?? (await requireActiveSpaceId());
+    try {
+      await setTaskProgressNote(spaceId, msg.goalId, null);
+      for (const uid of uncheckedIds) {
+        await setTaskProgressNote(spaceId, uid, null);
+      }
+      await broadcastStateChanged();
+    } catch (err) {
+      console.warn("[TSE] failed to clear progress notes in UNCHECK_ALL_DESCENDANTS", err);
+    }
+
+    return { success: true, uncheckedIds, clearedParentNoteIds: [msg.goalId] };
   },
   CHECK_SUBGOALS_STATUS: async (msg) => {
     let client: TimestripeApi;

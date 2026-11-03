@@ -95,6 +95,7 @@ export type AutoCompleteParentMessage = {
 export type AutoCompleteParentResult = {
   parentIdsToCheck: string[];
   parentIdsToUncheck: string[];
+  updatedProgressNotes?: Array<{ goalId: string; note: string | null }>;
 };
 export type UncheckAllDescendantsMessage = {
   type: "UNCHECK_ALL_DESCENDANTS";
@@ -103,6 +104,7 @@ export type UncheckAllDescendantsMessage = {
 export type UncheckAllDescendantsResult = {
   success: boolean;
   uncheckedIds: string[];
+  clearedParentNoteIds?: string[];
 };
 export type CheckSubgoalsStatusMessage = {
   type: "CHECK_SUBGOALS_STATUS";
