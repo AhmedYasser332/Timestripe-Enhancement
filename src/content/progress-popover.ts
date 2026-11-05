@@ -90,6 +90,42 @@ function injectPopoverStyles(): void {
       border-color: #7c5cff;
       box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.25);
     }
+    .tse-prog-input.tse-input-surplus:focus {
+      border-color: #ef4444;
+      box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
+    }
+    .tse-prog-surplus-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 6px 10px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: #a1a1aa;
+      transition: all 0.12s ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .tse-prog-surplus-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #f4f4f5;
+    }
+    .tse-prog-surplus-btn.active {
+      background: rgba(239, 68, 68, 0.22);
+      border-color: rgba(239, 68, 68, 0.6);
+      color: #fca5a5;
+      font-weight: 600;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
+    }
+    .tse-prog-surplus-btn.active:hover {
+      background: rgba(239, 68, 68, 0.32);
+      border-color: rgba(239, 68, 68, 0.8);
+      color: #ffffff;
+    }
     .tse-prog-pills {
       display: flex;
       flex-wrap: wrap;
@@ -173,18 +209,71 @@ export function openProgressPopover(
   };
   header.append(title, closeBtn);
 
-  // Input
+  // Input & Surplus Toggle
   const inputWrap = document.createElement("div");
   inputWrap.className = "tse-prog-input-wrap";
   const input = document.createElement("input");
   input.type = "text";
   input.className = "tse-prog-input";
-  input.placeholder = "e.g. 50% or 15m left";
+  input.placeholder = "e.g. 50%, 15m, or +24";
   input.value = currentVal;
-  inputWrap.appendChild(input);
+
+  let isSurplus = currentVal.trim().startsWith("+");
+
+  const surplusBtn = document.createElement("button");
+  surplusBtn.type = "button";
+  surplusBtn.className = "tse-prog-surplus-btn";
+  surplusBtn.textContent = "+ زيادة";
+  surplusBtn.title = "تحديد كـ زيادة / Overtime (+) — اللون محمر";
+
+  const updateSurplusUI = () => {
+    if (isSurplus) {
+      surplusBtn.classList.add("active");
+      surplusBtn.setAttribute("aria-pressed", "true");
+      input.classList.add("tse-input-surplus");
+    } else {
+      surplusBtn.classList.remove("active");
+      surplusBtn.setAttribute("aria-pressed", "false");
+      input.classList.remove("tse-input-surplus");
+    }
+  };
+  updateSurplusUI();
+
+  // Auto-detect when typing '+' or deleting '+' in real-time
+  input.addEventListener("input", () => {
+    const trimmedStart = input.value.trimStart();
+    const hasPlus = trimmedStart.startsWith("+");
+    if (hasPlus !== isSurplus) {
+      isSurplus = hasPlus;
+      updateSurplusUI();
+    }
+  });
+
+  // Toggle button click toggles state and prepends or removes '+'
+  surplusBtn.onclick = (e) => {
+    e.stopPropagation();
+    isSurplus = !isSurplus;
+    const raw = input.value.trim();
+    if (isSurplus) {
+      if (!raw.startsWith("+")) {
+        input.value = "+" + raw;
+      }
+    } else {
+      if (raw.startsWith("+")) {
+        input.value = raw.replace(/^\++\s*/, "");
+      }
+    }
+    updateSurplusUI();
+    input.focus();
+  };
+
+  inputWrap.append(input, surplusBtn);
 
   const save = (val: string) => {
-    const trimmed = val.trim();
+    let trimmed = val.trim();
+    if (isSurplus && trimmed && !trimmed.startsWith("+")) {
+      trimmed = "+" + trimmed;
+    }
     closeActivePopover();
     optimisticProgressNote(goalId, trimmed || null);
     void sendToBg({
@@ -216,7 +305,12 @@ export function openProgressPopover(
     pill.textContent = p;
     pill.onclick = (e) => {
       e.stopPropagation();
-      input.value = p;
+      if (isSurplus) {
+        input.value = "+" + p.replace(/^\++/, "");
+      } else {
+        input.value = p;
+      }
+      updateSurplusUI();
       input.focus();
     };
     pillsWrap.appendChild(pill);

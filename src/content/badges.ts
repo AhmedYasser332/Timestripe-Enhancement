@@ -184,6 +184,20 @@ export function injectStyles(): void {
       transform: scale(0.96);
     }
 
+    /* Surplus / Overtime Badge (Warm Reddish / Coral Accent) */
+    .${PROG_CLASS}.tse-prog-surplus {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      color: #fca5a5 !important;
+      box-shadow: 0 1px 4px rgba(239, 68, 68, 0.2);
+    }
+    .${PROG_CLASS}.tse-prog-surplus:hover {
+      background: rgba(239, 68, 68, 0.32);
+      border-color: rgba(239, 68, 68, 0.7);
+      color: #ffffff !important;
+      transform: scale(1.04);
+    }
+
     /* Per-task Text Direction & Alignment (PRD §36.1) */
     .GoalRow[data-tse-dir="rtl"],
     .GoalRow[data-tse-dir="rtl"] .GoalRow-content,
@@ -394,9 +408,15 @@ export function applyBadge(
   if (progressNote && content) {
     const progBadge = document.createElement("span");
     progBadge.className = PROG_CLASS;
+    const isSurplus = progressNote.trim().startsWith("+");
+    if (isSurplus) {
+      progBadge.classList.add("tse-prog-surplus");
+    }
     const icon = progressNote.includes("⏳") || progressNote.includes("✓") || progressNote.includes("%") ? "" : "⏳ ";
     progBadge.textContent = `${icon}${progressNote}`;
-    progBadge.title = `Progress: ${progressNote} (click to edit or clear)`;
+    progBadge.title = isSurplus
+      ? `Surplus: ${progressNote} (click to edit or clear)`
+      : `Progress: ${progressNote} (click to edit or clear)`;
     progBadge.onclick = (e) => {
       e.stopPropagation();
       openProgressPopover(goalId, progBadge);

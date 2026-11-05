@@ -155,3 +155,45 @@ describe("Multi-tier subgoals progress simulation", () => {
     expect(step6.mNote).toBeNull();
   });
 });
+
+/** Pure helper to test surplus note classification */
+export function isSurplusProgressNote(note: string | null | undefined): boolean {
+  if (!note) return false;
+  return note.trim().startsWith("+");
+}
+
+describe("isSurplusProgressNote: surplus classification", () => {
+  it("identifies notes starting with '+' as surplus (reddish badge)", () => {
+    expect(isSurplusProgressNote("+24")).toBe(true);
+    expect(isSurplusProgressNote("+14")).toBe(true);
+    expect(isSurplusProgressNote("+4")).toBe(true);
+    expect(isSurplusProgressNote("  +30m  ")).toBe(true);
+  });
+
+  it("identifies normal progress notes as non-surplus (purple badge)", () => {
+    expect(isSurplusProgressNote("10/20")).toBe(false);
+    expect(isSurplusProgressNote("2/7")).toBe(false);
+    expect(isSurplusProgressNote("50%")).toBe(false);
+    expect(isSurplusProgressNote("15m")).toBe(false);
+    expect(isSurplusProgressNote(null)).toBe(false);
+    expect(isSurplusProgressNote("")).toBe(false);
+  });
+
+  it("surplus toggle operation prepends or removes '+' cleanly", () => {
+    function toggleSurplus(current: string, toSurplus: boolean): string {
+      const raw = current.trim();
+      if (toSurplus) {
+        return raw.startsWith("+") ? raw : "+" + raw;
+      } else {
+        return raw.replace(/^\++\s*/, "");
+      }
+    }
+
+    expect(toggleSurplus("24", true)).toBe("+24");
+    expect(toggleSurplus("+24", true)).toBe("+24");
+    expect(toggleSurplus("+24", false)).toBe("24");
+    expect(toggleSurplus("15m", true)).toBe("+15m");
+    expect(toggleSurplus("+15m", false)).toBe("15m");
+  });
+});
+
