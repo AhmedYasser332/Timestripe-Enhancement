@@ -73,62 +73,75 @@ function parentsStorageKey(spaceId: string): string {
 }
 
 async function loadSpaceData(spaceId: string): Promise<void> {
+  if (!chrome.runtime?.id) return;
   const pKey = parentsStorageKey(spaceId);
 
-  if (spaceId === "all") {
-    const all = await chrome.storage.local.get(null);
-    const projMap = new Map<string, Project>();
-    const mergedLinks: Record<string, { projectId: string }> = {};
-    const mergedOverrides: Record<string, string> = {};
-    const mergedTexts: Record<string, TaskTextConfig> = {};
-    const mergedNotes: Record<string, string> = {};
+  try {
+    if (spaceId === "all") {
+      const all = await chrome.storage.local.get(null);
+      const projMap = new Map<string, Project>();
+      const mergedLinks: Record<string, { projectId: string }> = {};
+      const mergedOverrides: Record<string, string> = {};
+      const mergedTexts: Record<string, TaskTextConfig> = {};
+      const mergedNotes: Record<string, string> = {};
 
-    for (const [key, val] of Object.entries(all)) {
-      if (key.startsWith("data:") && val && typeof val === "object") {
-        const d = val as Partial<SpaceData>;
-        for (const p of d.projects ?? []) {
-          projMap.set(p.id, p);
+      for (const [key, val] of Object.entries(all)) {
+        if (key.startsWith("data:") && val && typeof val === "object") {
+          const d = val as Partial<SpaceData>;
+          for (const p of d.projects ?? []) {
+            projMap.set(p.id, p);
+          }
+          Object.assign(mergedLinks, d.taskProjectLinks ?? {});
+          Object.assign(mergedOverrides, d.taskColorOverrides ?? {});
+          Object.assign(mergedTexts, d.taskTextConfigs ?? {});
+          Object.assign(mergedNotes, d.taskProgressNotes ?? {});
         }
-        Object.assign(mergedLinks, d.taskProjectLinks ?? {});
-        Object.assign(mergedOverrides, d.taskColorOverrides ?? {});
-        Object.assign(mergedTexts, d.taskTextConfigs ?? {});
-        Object.assign(mergedNotes, d.taskProgressNotes ?? {});
+      }
+      projects = Array.from(projMap.values());
+      taskProjectLinks = mergedLinks;
+      taskColorOverrides = mergedOverrides;
+      taskTextConfigs = mergedTexts;
+      taskProgressNotes = mergedNotes;
+    } else {
+      const spaceKey = `data:${spaceId}`;
+      const globalKey = `data:global`;
+      const res = await chrome.storage.local.get([spaceKey, globalKey, pKey]);
+      const spaceData = res[spaceKey] as Partial<SpaceData> | undefined;
+      const globalData = res[globalKey] as Partial<SpaceData> | undefined;
+
+      const projMap = new Map<string, Project>();
+      for (const p of globalData?.projects ?? []) {
+        projMap.set(p.id, p);
+      }
+      for (const p of spaceData?.projects ?? []) {
+        projMap.set(p.id, p);
+      }
+      projects = Array.from(projMap.values());
+      taskProjectLinks = { ...(globalData?.taskProjectLinks ?? {}), ...(spaceData?.taskProjectLinks ?? {}) };
+      taskColorOverrides = { ...(globalData?.taskColorOverrides ?? {}), ...(spaceData?.taskColorOverrides ?? {}) };
+      taskTextConfigs = { ...(globalData?.taskTextConfigs ?? {}), ...(spaceData?.taskTextConfigs ?? {}) };
+      taskProgressNotes = { ...(globalData?.taskProgressNotes ?? {}), ...(spaceData?.taskProgressNotes ?? {}) };
+
+      const cachedParents = res[pKey] as Record<string, string | null> | undefined;
+      if (cachedParents && typeof cachedParents === "object") {
+        goalParents = { ...cachedParents, ...goalParents };
       }
     }
-    projects = Array.from(projMap.values());
-    taskProjectLinks = mergedLinks;
-    taskColorOverrides = mergedOverrides;
-    taskTextConfigs = mergedTexts;
-    taskProgressNotes = mergedNotes;
-  } else {
-    const spaceKey = `data:${spaceId}`;
-    const globalKey = `data:global`;
-    const res = await chrome.storage.local.get([spaceKey, globalKey, pKey]);
-    const spaceData = res[spaceKey] as Partial<SpaceData> | undefined;
-    const globalData = res[globalKey] as Partial<SpaceData> | undefined;
-
-    const projMap = new Map<string, Project>();
-    for (const p of globalData?.projects ?? []) {
-      projMap.set(p.id, p);
-    }
-    for (const p of spaceData?.projects ?? []) {
-      projMap.set(p.id, p);
-    }
-    projects = Array.from(projMap.values());
-    taskProjectLinks = { ...(globalData?.taskProjectLinks ?? {}), ...(spaceData?.taskProjectLinks ?? {}) };
-    taskColorOverrides = { ...(globalData?.taskColorOverrides ?? {}), ...(spaceData?.taskColorOverrides ?? {}) };
-    taskTextConfigs = { ...(globalData?.taskTextConfigs ?? {}), ...(spaceData?.taskTextConfigs ?? {}) };
-    taskProgressNotes = { ...(globalData?.taskProgressNotes ?? {}), ...(spaceData?.taskProgressNotes ?? {}) };
-
-    const cachedParents = res[pKey] as Record<string, string | null> | undefined;
-    if (cachedParents && typeof cachedParents === "object") {
-      goalParents = { ...cachedParents, ...goalParents };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("context invalidated")) {
+      console.warn("[TSE] loadSpaceData failed", err);
     }
   }
 }
 
 function saveParentsCache(spaceId: string): void {
-  void chrome.storage.local.set({ [parentsStorageKey(spaceId)]: goalParents });
+  if (!chrome.runtime?.id) return;
+  try {
+    void chrome.storage.local.set({ [parentsStorageKey(spaceId)]: goalParents }).catch(() => {});
+  } catch {
+    // context invalidated
+  }
 }
 
 /**
@@ -180,17 +193,25 @@ async function fetchGoalParents(spaceId: string, retryAttempt = 0): Promise<void
 }
 
 export async function reloadAll(): Promise<void> {
-  const stored = await chrome.storage.local.get(["settings"]);
-  settings = { ...DEFAULT_SETTINGS, ...(stored.settings as Partial<Settings> | undefined) };
-  activeSpaceId = settings.activeSpaceId;
-  if (activeSpaceId) {
-    await loadSpaceData(activeSpaceId);
-    void fetchGoalParents(activeSpaceId);
-  } else {
-    projects = [];
-    taskProjectLinks = {};
+  if (!chrome.runtime?.id) return;
+  try {
+    const stored = await chrome.storage.local.get(["settings"]);
+    settings = { ...DEFAULT_SETTINGS, ...(stored.settings as Partial<Settings> | undefined) };
+    activeSpaceId = settings.activeSpaceId;
+    if (activeSpaceId) {
+      await loadSpaceData(activeSpaceId);
+      void fetchGoalParents(activeSpaceId);
+    } else {
+      projects = [];
+      taskProjectLinks = {};
+    }
+    recompute();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("context invalidated")) {
+      console.warn("[TSE] reloadAll failed", err);
+    }
   }
-  recompute();
 }
 
 /**

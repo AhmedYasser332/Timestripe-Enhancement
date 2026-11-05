@@ -965,15 +965,17 @@ function injectDashboardStyles(): void {
 
 function initResizableBox(box: HTMLElement): void {
   // 1. Restore saved dimensions if present
-  void chrome.storage.local.get("tse_dashboard_size").then((res) => {
-    const s = res?.tse_dashboard_size as { width?: number; height?: number } | undefined;
-    if (s?.width && s?.height) {
-      const maxW = window.innerWidth - 24;
-      const maxH = window.innerHeight - 24;
-      box.style.width = `${Math.min(maxW, Math.max(520, s.width))}px`;
-      box.style.height = `${Math.min(maxH, Math.max(420, s.height))}px`;
-    }
-  });
+  if (chrome.runtime?.id) {
+    void chrome.storage.local.get("tse_dashboard_size").then((res) => {
+      const s = res?.tse_dashboard_size as { width?: number; height?: number } | undefined;
+      if (s?.width && s?.height) {
+        const maxW = window.innerWidth - 24;
+        const maxH = window.innerHeight - 24;
+        box.style.width = `${Math.min(maxW, Math.max(520, s.width))}px`;
+        box.style.height = `${Math.min(maxH, Math.max(420, s.height))}px`;
+      }
+    }).catch(() => {});
+  }
 
   const handles = ["n", "s", "e", "w", "nw", "ne", "sw", "se"] as const;
   for (const dir of handles) {
@@ -1012,9 +1014,11 @@ function initResizableBox(box: HTMLElement): void {
       const onPointerUp = () => {
         window.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerUp);
-        void chrome.storage.local.set({
-          tse_dashboard_size: { width: box.offsetWidth, height: box.offsetHeight },
-        });
+        if (chrome.runtime?.id) {
+          void chrome.storage.local.set({
+            tse_dashboard_size: { width: box.offsetWidth, height: box.offsetHeight },
+          }).catch(() => {});
+        }
       };
 
       window.addEventListener("pointermove", onPointerMove);
